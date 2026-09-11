@@ -9,6 +9,9 @@ jobs:
   build-and-verify:
     name: Build & Verify Production Platform
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://github.com/Praveen04120/sprix-sales
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
