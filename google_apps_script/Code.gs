@@ -1,37 +1,48 @@
 /**
  * SPRIX SALES HIRING PLATFORM - PRODUCTION GOOGLE APPS SCRIPT API
  * 
- * Version: 2.0.0 (Production / Real Data)
+ * Version: 2.1.0 (Production / Real Data)
  * Purpose: Connects real Google Forms & Google Sheets to Sprix Hiring Management.
  * 
- * KEY FEATURES:
- * 1. Safe Dynamic Column Mapping: Never assumes fixed column positions or breaks existing data.
- * 2. Immutable Form Responses: Never overwrites original Google Form responses.
- * 3. Supports Existing Working Candidates, Joining Dates, and Final Scores (0-10).
- * 4. Tracks Scheduled Calls with "Reason for Call" for Today's Dashboard.
+ * ARCHITECTURE:
+ * 1. Read-only on Form Responses: Never mutates or overwrites Google Form responses.
+ * 2. Internal Metadata Sheet: Tracks Status, Final Scores (0-10), Joining Dates, Roles, Notes.
+ * 3. Calendar Sheet: Persists all scheduled calls, phone interviews, training sessions.
+ * 4. Manual Candidates Sheet: Persists candidates created via "+ Add Candidate".
+ * 5. Standalone & Bound Support: Auto-detects active spreadsheet or opens via sheetId param.
  * 
- * DEPLOYMENT:
+ * SETUP INSTRUCTIONS:
  * 1. Open your Google Spreadsheet (where Google Form responses land).
  * 2. Click: Extensions > Apps Script.
- * 3. Paste this code into Code.gs and save.
- * 4. Run "setupSprixSystem()" once to ensure internal helper sheets exist without touching your form data.
- * 5. Click "Deploy" > "New deployment" > "Web app" > "Execute as: Me" > "Who has access: Anyone".
- * 6. Copy the Web App URL into your Sprix Platform Settings.
+ * 3. Replace all contents of Code.gs with this code and save (Ctrl+S).
+ * 4. In the toolbar, select "setupSprixSystem" and click "Run" once to prepare helper sheets.
+ * 5. Click "Deploy" > "New deployment"
+ *    - Type: "Web app"
+ *    - Description: "Sprix Production API v2.1"
+ *    - Execute as: "Me (your email)"
+ *    - Who has access: "Anyone"
+ * 6. Click "Deploy", authorize permissions if prompted, and copy the Web App URL.
+ * 7. Paste the Web App URL into your Sprix Platform Settings.
  */
 
 var INTERNAL_SHEETS = {
   CALENDAR: 'Sprix_Calendar',
-  INTERNAL_METADATA: 'Sprix_Candidate_Metadata'
+  INTERNAL_METADATA: 'Sprix_Candidate_Metadata',
+  MANUAL_CANDIDATES: 'Sprix_Manual_Candidates'
 };
 
 /**
- * Run setup once to prepare the Calendar and internal tracking sheet.
- * Existing form responses and sheets are completely untouched.
+ * Run setup once to prepare the Calendar, metadata, and manual candidate helper sheets.
+ * Existing form responses and existing sheets are completely untouched.
  */
 function setupSprixSystem() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    Logger.log('Please run setupSprixSystem from the spreadsheet container.');
+    return;
+  }
   
-  // Create Calendar sheet if not present
+  // 1. Create Calendar sheet if not present
   var calSheet = ss.getSheetByName(INTERNAL_SHEETS.CALENDAR);
   if (!calSheet) {
     calSheet = ss.insertSheet(INTERNAL_SHEETS.CALENDAR);
@@ -51,7 +62,7 @@ function setupSprixSystem() {
     formatHeaderRow(calSheet);
   }
   
-  // Create Internal Metadata sheet if not present
+  // 2. Create Internal Metadata sheet if not present
   var metaSheet = ss.getSheetByName(INTERNAL_SHEETS.INTERNAL_METADATA);
   if (!metaSheet) {
     metaSheet = ss.insertSheet(INTERNAL_SHEETS.INTERNAL_METADATA);
@@ -68,35 +79,64 @@ function setupSprixSystem() {
     ]);
     formatHeaderRow(metaSheet);
   }
+
+  // 3. Create Manual Candidates sheet if not present
+  var manualSheet = ss.getSheetByName(INTERNAL_SHEETS.MANUAL_CANDIDATES);
+  if (!manualSheet) {
+    manualSheet = ss.insertSheet(INTERNAL_SHEETS.MANUAL_CANDIDATES);
+    manualSheet.appendRow([
+      'Candidate ID',
+      'Timestamp',
+      'Full Name',
+      'Phone / Whatsapp',
+      'Email Address',
+      'Location',
+      'Source'
+    ]);
+    formatHeaderRow(manualSheet);
+  }
   
   Logger.log('Sprix Hiring System initialized safely.');
 }
 
 /**
- * Handle HTTP GET: Reads real candidates and calendar records from the active spreadsheet.
+ * Handle HTTP GET: Reads real candidates and calendar records from spreadsheet.
  */
 function doGet(e) {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    // Fast ping response for healthcheck
+    if (e && e.parameter && e.parameter.action === 'ping') {
+      return jsonResponse({
+        success: true,
+        message: 'Sprix Google Apps Script API is active',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    var ss = resolveSpreadsheet(e ? e.parameter : null);
+    if (!ss) {
+      return jsonResponse({
+        success: false,
+        error: 'Unable to open active spreadsheet. Ensure script is bound to your sheet or provide sheetId parameter.'
+      });
+    }
+
     var candidates = getRealCandidatesData(ss);
     var calendar = getRealCalendarData(ss);
     
-    var response = {
+    return jsonResponse({
       success: true,
       timestamp: new Date().toISOString(),
       candidates: candidates,
       calendar: calendar,
       sheetTitle: ss.getName(),
       totalCandidates: candidates.length
-    };
-    
-    return ContentService.createTextOutput(JSON.stringify(response))
-      .setMimeType(ContentService.MimeType.JSON);
+    });
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonResponse({
       success: false,
       error: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
 }
 
@@ -105,12 +145,25 @@ function doGet(e) {
  */
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse({ success: false, error: 'Empty POST payload' });
+    }
+
     var requestData = JSON.parse(e.postData.contents);
     var action = requestData.action;
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = resolveSpreadsheet(requestData);
+    
+    if (!ss) {
+      return jsonResponse({ success: false, error: 'Unable to open spreadsheet' });
+    }
+
     var result = { success: true };
     
     switch (action) {
+      case 'PING':
+        result = { success: true, message: 'Sprix Apps Script POST API online' };
+        break;
+
       case 'ADD_CANDIDATE':
         result = addCandidateToSheet(ss, requestData.candidate);
         break;
@@ -131,14 +184,30 @@ function doPost(e) {
         throw new Error('Unsupported action: ' + action);
     }
     
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse(result);
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonResponse({
       success: false,
       error: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
+}
+
+/**
+ * Helper to resolve spreadsheet whether container-bound or standalone
+ */
+function resolveSpreadsheet(params) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss;
+  } catch (e) {}
+
+  if (params && params.sheetId) {
+    try {
+      return SpreadsheetApp.openById(params.sheetId);
+    } catch (e) {}
+  }
+  return null;
 }
 
 // ----------------------------------------------------
@@ -146,83 +215,154 @@ function doPost(e) {
 // ----------------------------------------------------
 
 function getRealCandidatesData(ss) {
-  // Find candidates sheet: prioritize 'Candidates' or 'Form Responses 1', or the first sheet
-  var candSheet = ss.getSheetByName('Candidates') ||
-                  ss.getSheetByName('Form Responses 1') ||
-                  ss.getSheetByName('Form Responses') ||
-                  ss.getSheets()[0];
-                  
-  if (!candSheet || candSheet.getLastRow() < 2) {
-    return [];
-  }
-  
-  var headers = candSheet.getRange(1, 1, 1, candSheet.getLastColumn()).getValues()[0];
-  var data = candSheet.getRange(2, 1, candSheet.getLastRow() - 1, candSheet.getLastColumn()).getValues();
-  
-  // Read metadata map (for internal statuses, final scores, joining dates)
-  var metaMap = getMetadataMap(ss);
-  
-  // Map column header indices flexibly
-  var colMap = mapHeaderIndices(headers);
   var candidates = [];
-  
-  for (var i = 0; i < data.length; i++) {
-    var row = data[i];
-    var rowIndex = i + 2; // 1-indexed row in sheet
-    
-    // Extract candidate ID or generate a stable one based on row or sheet ID
-    var id = (colMap.id !== -1 && row[colMap.id]) ? String(row[colMap.id]).trim() : ('SPRIX-' + String(rowIndex).padStart(4, '0'));
-    var name = (colMap.name !== -1 && row[colMap.name]) ? String(row[colMap.name]).trim() : '';
-    if (!name && colMap.email !== -1 && row[colMap.email]) {
-      name = String(row[colMap.email]).split('@')[0];
+  var seenKeys = {}; // Prevent duplicate candidate entries
+
+  var metaMap = getMetadataMap(ss);
+
+  // 1. Read Google Form response sheets
+  var formSheets = findFormResponseSheets(ss);
+  for (var f = 0; f < formSheets.length; f++) {
+    var sheet = formSheets[f];
+    if (sheet.getLastRow() < 2) continue;
+
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+    var colMap = mapHeaderIndices(headers);
+
+    for (var i = 0; i < data.length; i++) {
+      var row = data[i];
+      var rowIndex = i + 2;
+
+      var email = (colMap.email !== -1 && row[colMap.email]) ? String(row[colMap.email]).trim() : '';
+      var name = (colMap.name !== -1 && row[colMap.name]) ? String(row[colMap.name]).trim() : '';
+      if (!name && email) name = email.split('@')[0];
+      if (!name) continue; // skip completely blank row
+
+      var id = (colMap.id !== -1 && row[colMap.id]) ? String(row[colMap.id]).trim() : ('SPRIX-FR-' + String(rowIndex).padStart(4, '0'));
+      var dedupeKey = (id || email || name).toLowerCase();
+      if (seenKeys[dedupeKey]) continue;
+      seenKeys[dedupeKey] = true;
+
+      var phone = (colMap.phone !== -1 && row[colMap.phone]) ? String(row[colMap.phone]).trim() : '';
+      var location = (colMap.location !== -1 && row[colMap.location]) ? String(row[colMap.location]).trim() : '';
+      var appDate = (colMap.date !== -1 && row[colMap.date]) ? formatDateValue(row[colMap.date]) : '';
+
+      // Extract all form questions as dynamic key-values
+      var formResponses = {};
+      for (var c = 0; c < headers.length; c++) {
+        var hName = String(headers[c]).trim();
+        if (hName && row[c] !== '' && row[c] !== null && row[c] !== undefined) {
+          formResponses[hName] = formatDateValue(row[c]);
+        }
+      }
+
+      // Merge internal metadata
+      var meta = metaMap[id] || (email ? metaMap[email] : null) || {};
+      var currentStatus = meta.currentStatus || (colMap.status !== -1 && row[colMap.status] ? String(row[colMap.status]) : 'New');
+      var finalScore = meta.finalScore !== undefined && meta.finalScore !== null && meta.finalScore !== '' ? Number(meta.finalScore) : null;
+      var joiningDate = meta.joiningDate || (colMap.joiningDate !== -1 && row[colMap.joiningDate] ? formatDateValue(row[colMap.joiningDate]) : '');
+      var role = meta.role || (colMap.role !== -1 && row[colMap.role] ? String(row[colMap.role]) : '');
+
+      candidates.push({
+        id: id,
+        name: name,
+        phone: phone,
+        email: email,
+        location: location,
+        applicationDate: appDate,
+        lastUpdated: meta.lastUpdated || appDate || new Date().toISOString().split('T')[0],
+        currentStage: deriveStage(currentStatus),
+        currentStatus: currentStatus,
+        finalScore: finalScore,
+        joiningDate: joiningDate,
+        role: role,
+        callReason: meta.callReason || '',
+        callStatus: meta.callStatus || 'Scheduled',
+        formResponses: formResponses,
+        adminNotes: meta.notes ? [{ id: 'n-' + id, timestamp: meta.lastUpdated || '', author: 'Admin', note: meta.notes }] : []
+      });
     }
-    if (!name) continue; // skip blank rows
-    
-    var phone = (colMap.phone !== -1 && row[colMap.phone]) ? String(row[colMap.phone]).trim() : '';
-    var email = (colMap.email !== -1 && row[colMap.email]) ? String(row[colMap.email]).trim() : '';
-    var location = (colMap.location !== -1 && row[colMap.location]) ? String(row[colMap.location]).trim() : '';
-    var appDate = (colMap.date !== -1 && row[colMap.date]) ? formatDateValue(row[colMap.date]) : '';
-    
-    // Extract all dynamic Google Form questions as key-value pairs
-    var formResponses = {};
-    for (var c = 0; c < headers.length; c++) {
-      var headerName = String(headers[c]).trim();
-      if (headerName && row[c] !== '' && row[c] !== null && row[c] !== undefined) {
-        formResponses[headerName] = formatDateValue(row[c]);
+  }
+
+  // 2. Read Manually Added Candidates sheet
+  var manualSheet = ss.getSheetByName(INTERNAL_SHEETS.MANUAL_CANDIDATES);
+  if (manualSheet && manualSheet.getLastRow() >= 2) {
+    var mData = manualSheet.getRange(2, 1, manualSheet.getLastRow() - 1, manualSheet.getLastColumn()).getValues();
+    for (var m = 0; m < mData.length; m++) {
+      var mRow = mData[m];
+      var mId = String(mRow[0] || '').trim();
+      var mName = String(mRow[2] || '').trim();
+      var mPhone = String(mRow[3] || '').trim();
+      var mEmail = String(mRow[4] || '').trim();
+      var mLocation = String(mRow[5] || '').trim();
+      var mDate = formatDateValue(mRow[1]);
+
+      if (!mName) continue;
+      var mDedupe = (mId || mEmail || mName).toLowerCase();
+      if (seenKeys[mDedupe]) continue;
+      seenKeys[mDedupe] = true;
+
+      var mMeta = metaMap[mId] || (mEmail ? metaMap[mEmail] : null) || {};
+      var mStatus = mMeta.currentStatus || 'Working';
+      var mScore = mMeta.finalScore !== undefined && mMeta.finalScore !== null && mMeta.finalScore !== '' ? Number(mMeta.finalScore) : null;
+
+      candidates.push({
+        id: mId,
+        name: mName,
+        phone: mPhone,
+        email: mEmail,
+        location: mLocation,
+        applicationDate: mDate,
+        lastUpdated: mMeta.lastUpdated || mDate || new Date().toISOString().split('T')[0],
+        currentStage: deriveStage(mStatus),
+        currentStatus: mStatus,
+        finalScore: mScore,
+        joiningDate: mMeta.joiningDate || '',
+        role: mMeta.role || 'Sales Representative',
+        callReason: mMeta.callReason || '',
+        callStatus: mMeta.callStatus || 'Scheduled',
+        formResponses: { 'Candidate Source': 'Manual Entry / Direct Hire' },
+        adminNotes: mMeta.notes ? [{ id: 'mn-' + mId, timestamp: mMeta.lastUpdated || '', author: 'Admin', note: mMeta.notes }] : []
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function findFormResponseSheets(ss) {
+  var sheets = ss.getSheets();
+  var matched = [];
+
+  for (var i = 0; i < sheets.length; i++) {
+    var name = sheets[i].getName();
+    // Exclude internal helper sheets
+    if (name === INTERNAL_SHEETS.CALENDAR || 
+        name === INTERNAL_SHEETS.INTERNAL_METADATA || 
+        name === INTERNAL_SHEETS.MANUAL_CANDIDATES) {
+      continue;
+    }
+    var lower = name.toLowerCase();
+    if (lower.includes('form') || lower.includes('response') || lower === 'candidates') {
+      matched.push(sheets[i]);
+    }
+  }
+
+  // Fallback: if no sheet matched by name pattern, return the first non-internal sheet
+  if (matched.length === 0) {
+    for (var j = 0; j < sheets.length; j++) {
+      var n = sheets[j].getName();
+      if (n !== INTERNAL_SHEETS.CALENDAR && 
+          n !== INTERNAL_SHEETS.INTERNAL_METADATA && 
+          n !== INTERNAL_SHEETS.MANUAL_CANDIDATES) {
+        matched.push(sheets[j]);
+        break;
       }
     }
-    
-    // Merge internal metadata (status, score, joining date, notes)
-    var meta = metaMap[id] || metaMap[email] || {};
-    var currentStatus = meta.currentStatus || (colMap.status !== -1 && row[colMap.status] ? String(row[colMap.status]) : 'New');
-    var finalScore = meta.finalScore !== undefined && meta.finalScore !== null && meta.finalScore !== '' ? Number(meta.finalScore) : null;
-    var joiningDate = meta.joiningDate || (colMap.joiningDate !== -1 && row[colMap.joiningDate] ? formatDateValue(row[colMap.joiningDate]) : '');
-    var role = meta.role || (colMap.role !== -1 && row[colMap.role] ? String(row[colMap.role]) : '');
-    
-    // Derive stage from status
-    var currentStage = deriveStage(currentStatus);
-    
-    candidates.push({
-      id: id,
-      name: name,
-      phone: phone,
-      email: email,
-      location: location,
-      applicationDate: appDate,
-      lastUpdated: meta.lastUpdated || appDate || new Date().toISOString().split('T')[0],
-      currentStage: currentStage,
-      currentStatus: currentStatus,
-      finalScore: finalScore,
-      joiningDate: joiningDate,
-      role: role,
-      callReason: meta.callReason || '',
-      callStatus: meta.callStatus || 'Scheduled',
-      formResponses: formResponses,
-      adminNotes: meta.notes ? [{ id: 'n1', timestamp: meta.lastUpdated || '', author: 'Admin', note: meta.notes }] : []
-    });
   }
-  
-  return candidates;
+
+  return matched;
 }
 
 function mapHeaderIndices(headers) {
@@ -243,9 +383,9 @@ function mapHeaderIndices(headers) {
     var h = String(headers[i]).toLowerCase().trim();
     if (map.id === -1 && (h === 'candidate id' || h === 'id' || h === 'roll no')) map.id = i;
     if (map.name === -1 && (h.includes('name') || h === 'candidate')) map.name = i;
-    if (map.phone === -1 && (h.includes('phone') || h.includes('mobile') || h.includes('contact') || h.includes('whatsapp'))) map.phone = i;
+    if (map.phone === -1 && (h.includes('phone') || h.includes('mobile') || h.includes('whatsapp') || h.includes('contact'))) map.phone = i;
     if (map.email === -1 && h.includes('email')) map.email = i;
-    if (map.location === -1 && (h.includes('location') || h.includes('city') || h.includes('address') || h.includes('state'))) map.location = i;
+    if (map.location === -1 && (h.includes('location') || h.includes('city') || h.includes('college') || h.includes('address'))) map.location = i;
     if (map.date === -1 && (h.includes('timestamp') || h === 'date' || h.includes('application date'))) map.date = i;
     if (map.status === -1 && (h.includes('status') || h === 'stage')) map.status = i;
     if (map.score === -1 && (h.includes('score') || h.includes('rating'))) map.score = i;
@@ -279,7 +419,7 @@ function getMetadataMap(ss) {
     if (!id) continue;
     map[id] = {
       currentStatus: r[1] ? String(r[1]) : '',
-      finalScore: r[2] !== '' && r[2] !== null ? Number(r[2]) : null,
+      finalScore: r[2] !== '' && r[2] !== null && r[2] !== undefined ? Number(r[2]) : null,
       joiningDate: r[3] ? formatDateValue(r[3]) : '',
       role: r[4] ? String(r[4]) : '',
       callReason: r[5] ? String(r[5]) : '',
@@ -299,6 +439,7 @@ function getRealCalendarData(ss) {
   var events = [];
   for (var i = 0; i < data.length; i++) {
     var r = data[i];
+    if (!r[0] && !r[2]) continue; // skip blank rows
     events.push({
       id: String(r[0]),
       candidateId: String(r[1]),
@@ -317,34 +458,40 @@ function getRealCalendarData(ss) {
 }
 
 // ----------------------------------------------------
-// MUTATION HELPERS
+// MUTATION OPERATIONS (Google Sheets Persistence)
 // ----------------------------------------------------
 
 function addCandidateToSheet(ss, candidate) {
-  var candSheet = ss.getSheetByName('Candidates') || ss.getSheets()[0];
-  var lastCol = candSheet.getLastColumn() || 5;
+  var manualSheet = ss.getSheetByName(INTERNAL_SHEETS.MANUAL_CANDIDATES);
+  if (!manualSheet) {
+    setupSprixSystem();
+    manualSheet = ss.getSheetByName(INTERNAL_SHEETS.MANUAL_CANDIDATES);
+  }
   
-  // Append new candidate row
-  var row = [
-    candidate.id || ('SPRIX-' + Date.now().toString().slice(-4)),
-    new Date(),
+  var candId = candidate.id || ('SPRIX-M-' + Date.now().toString().slice(-4));
+  var now = new Date();
+
+  // Save to Manual Candidates sheet
+  manualSheet.appendRow([
+    candId,
+    now,
     candidate.name || '',
     candidate.phone || '',
     candidate.email || '',
-    candidate.location || ''
-  ];
-  candSheet.appendRow(row);
+    candidate.location || '',
+    'Manual Entry'
+  ]);
   
   // Save internal metadata
-  updateCandidateMetadata(ss, row[0], {
+  updateCandidateMetadata(ss, candId, {
     currentStatus: candidate.currentStatus || 'Working',
     finalScore: candidate.finalScore,
     joiningDate: candidate.joiningDate,
     role: candidate.role,
-    notes: candidate.notes
+    notes: candidate.adminNotes && candidate.adminNotes[0] ? candidate.adminNotes[0].note : ''
   });
   
-  return { success: true, id: row[0] };
+  return { success: true, id: candId };
 }
 
 function updateCandidateMetadata(ss, candidateId, updates) {
@@ -364,22 +511,22 @@ function updateCandidateMetadata(ss, candidateId, updates) {
     }
   }
   
-  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'GMT', 'yyyy-MM-dd HH:mm');
   
   if (rowIndex !== -1) {
     if (updates.currentStatus !== undefined) metaSheet.getRange(rowIndex, 2).setValue(updates.currentStatus);
-    if (updates.finalScore !== undefined) metaSheet.getRange(rowIndex, 3).setValue(updates.finalScore);
+    if (updates.finalScore !== undefined) metaSheet.getRange(rowIndex, 3).setValue(updates.finalScore !== null ? updates.finalScore : '');
     if (updates.joiningDate !== undefined) metaSheet.getRange(rowIndex, 4).setValue(updates.joiningDate);
     if (updates.role !== undefined) metaSheet.getRange(rowIndex, 5).setValue(updates.role);
     if (updates.callReason !== undefined) metaSheet.getRange(rowIndex, 6).setValue(updates.callReason);
     if (updates.callStatus !== undefined) metaSheet.getRange(rowIndex, 7).setValue(updates.callStatus);
-    if (updates.notes !== undefined) metaSheet.getRange(rowIndex, 8).setValue(updates.notes);
+    if (updates.notes !== undefined && updates.notes) metaSheet.getRange(rowIndex, 8).setValue(updates.notes);
     metaSheet.getRange(rowIndex, 9).setValue(now);
   } else {
     metaSheet.appendRow([
       candidateId,
       updates.currentStatus || 'New',
-      updates.finalScore !== undefined ? updates.finalScore : '',
+      updates.finalScore !== undefined && updates.finalScore !== null ? updates.finalScore : '',
       updates.joiningDate || '',
       updates.role || '',
       updates.callReason || '',
@@ -443,7 +590,12 @@ function formatHeaderRow(sheet) {
 function formatDateValue(val) {
   if (!val) return '';
   if (val instanceof Date) {
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || 'GMT', 'yyyy-MM-dd');
   }
   return String(val);
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }

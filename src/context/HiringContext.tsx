@@ -6,6 +6,7 @@ import {
   CalendarEvent,
   AppSettings,
   Stage,
+  AdminNote,
 } from '@/types';
 import { initialSettings } from '@/data/seedData';
 
@@ -32,12 +33,12 @@ interface HiringContextType {
   isLoading: boolean;
   loadError: string | null;
   syncStatus: { isSyncing: boolean; lastSync: string; error: string | null };
-  fetchLatestData: () => Promise<void>;
+  fetchLatestData: (overrideUrl?: string) => Promise<void>;
   triggerSync: () => Promise<void>;
-  addCandidate: (candidate: Candidate) => void;
+  addCandidate: (candidate: Candidate) => Promise<void>;
   updateCandidate: (id: string, updates: Partial<Candidate>, note?: string) => void;
   updateStage: (id: string, stage: Stage, status: string, note?: string) => void;
-  addCalendarEvent: (event: Omit<CalendarEvent, 'id'>) => void;
+  addCalendarEvent: (event: Omit<CalendarEvent, 'id'>) => Promise<void>;
   updateCallStatus: (candidateId: string, eventId: string | null, status: 'Completed' | 'Scheduled' | 'Pending' | 'Missed', reason?: string) => void;
   updateSettings: (newSettings: Partial<AppSettings>) => void;
   toasts: ToastState[];
@@ -54,6 +55,67 @@ const HiringContext = createContext<HiringContextType | undefined>(undefined);
 const STORAGE_KEY_REAL_CANDIDATES = 'sprix_prod_candidates';
 const STORAGE_KEY_REAL_EVENTS = 'sprix_prod_calendar_events';
 const STORAGE_KEY_SETTINGS = 'sprix_prod_settings';
+
+/**
+ * Merge candidate lists stably without producing duplicates.
+ * Prioritizes Candidate ID, then Email.
+ */
+function mergeCandidateRecords(existing: Candidate[], incoming: Candidate[]): Candidate[] {
+  const map = new Map<string, Candidate>();
+
+  // Add existing candidates to map
+  for (const c of existing) {
+    const key = (c.id || c.email || '').trim().toLowerCase();
+    if (key) map.set(key, c);
+  }
+
+  // Merge incoming candidates from Google Sheets
+  for (const inc of incoming) {
+    const key = (inc.id || inc.email || '').trim().toLowerCase();
+    if (!key) continue;
+
+    const prev = map.get(key);
+    if (prev) {
+      // Merge admin notes without duplicates
+      const noteMap = new Map<string, AdminNote>();
+      (prev.adminNotes || []).forEach(n => noteMap.set(n.id || n.note, n));
+      (inc.adminNotes || []).forEach(n => noteMap.set(n.id || n.note, n));
+
+      map.set(key, {
+        ...prev,
+        ...inc,
+        // Preserve local overrides if sheet hasn't recorded them yet
+        currentStatus: inc.currentStatus || prev.currentStatus,
+        finalScore: inc.finalScore !== null && inc.finalScore !== undefined ? inc.finalScore : prev.finalScore,
+        adminNotes: Array.from(noteMap.values()),
+        formResponses: {
+          ...(prev.formResponses || {}),
+          ...(inc.formResponses || {}),
+        },
+      });
+    } else {
+      map.set(key, inc);
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+/**
+ * Merge calendar events stably without duplicates.
+ */
+function mergeEventRecords(existing: CalendarEvent[], incoming: CalendarEvent[]): CalendarEvent[] {
+  const map = new Map<string, CalendarEvent>();
+  for (const e of existing) {
+    if (e.id) map.set(e.id, e);
+  }
+  for (const inc of incoming) {
+    if (inc.id) {
+      map.set(inc.id, { ...(map.get(inc.id) || {}), ...inc });
+    }
+  }
+  return Array.from(map.values());
+}
 
 export function HiringProvider({ children }: { children: React.ReactNode }) {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -80,7 +142,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     error: string | null;
   }>({
     isSyncing: false,
-    lastSync: 'Not synced',
+    lastSync: 'Not synced yet',
     error: null,
   });
 
@@ -90,7 +152,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       setToasts((prev) => [...prev, { id, message, type }]);
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
-      }, 4000);
+      }, 5000);
     },
     []
   );
@@ -99,78 +161,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Fetch real data from backend API
-  const fetchLatestData = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const res = await fetch('/api/candidates', { cache: 'no-store' });
-      const data = await res.json();
-
-      if (data.success && Array.isArray(data.candidates)) {
-        setCandidates(data.candidates);
-        setCalendarEvents(data.calendar || []);
-        setSyncStatus({
-          isSyncing: false,
-          lastSync: data.lastSyncTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          error: null,
-        });
-        localStorage.setItem(STORAGE_KEY_REAL_CANDIDATES, JSON.stringify(data.candidates));
-        localStorage.setItem(STORAGE_KEY_REAL_EVENTS, JSON.stringify(data.calendar || []));
-      } else if (data.unconfigured) {
-        // Not connected to Google Sheets yet: read local real records if any exist
-        const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
-        const savedEvents = localStorage.getItem(STORAGE_KEY_REAL_EVENTS);
-        if (saved) {
-          setCandidates(JSON.parse(saved));
-        } else {
-          setCandidates([]);
-        }
-        if (savedEvents) {
-          setCalendarEvents(JSON.parse(savedEvents));
-        } else {
-          setCalendarEvents([]);
-        }
-      } else {
-        throw new Error(data.error || 'Unable to load candidate data');
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unable to load candidate data';
-      setLoadError(msg);
-      // Fallback only to previously saved real records in local cache, never fake data
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
-        if (saved) setCandidates(JSON.parse(saved));
-      } catch {}
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  // Initialization
-  useEffect(() => {
-    // Check saved settings
-    try {
-      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
-      if (savedSettings) {
-        setSettings(JSON.parse(savedSettings));
-      }
-    } catch {}
-
-    // Check server authentication
-    fetch('/api/auth/session')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.authenticated) {
-          setIsAuthenticated(true);
-        }
-      })
-      .catch(() => {});
-
-    fetchLatestData();
-  }, [fetchLatestData]);
-
-  // Persist real candidates
+  // Persist real candidates to memory & local backup
   const persistCandidates = useCallback((newCandidates: Candidate[]) => {
     setCandidates(newCandidates);
     try {
@@ -185,14 +176,110 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  // Fetch real data from backend API with automatic URL discovery
+  const fetchLatestData = useCallback(async (overrideUrl?: string) => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      let activeUrl = overrideUrl || settings.appsScriptUrl;
+      if (!activeUrl && typeof window !== 'undefined') {
+        try {
+          const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
+          if (savedSettings) {
+            const parsed = JSON.parse(savedSettings);
+            if (parsed.appsScriptUrl) activeUrl = parsed.appsScriptUrl;
+          }
+        } catch {}
+      }
+
+      const queryUrl = activeUrl
+        ? `/api/candidates?appsScriptUrl=${encodeURIComponent(activeUrl.trim())}`
+        : '/api/candidates';
+
+      const res = await fetch(queryUrl, {
+        cache: 'no-store',
+        headers: activeUrl ? { 'x-apps-script-url': activeUrl.trim() } : {},
+      });
+      const data = await res.json();
+
+      if (data.success && Array.isArray(data.candidates)) {
+        const mergedCand = mergeCandidateRecords(candidates, data.candidates);
+        const mergedEvt = mergeEventRecords(calendarEvents, data.calendar || []);
+
+        persistCandidates(mergedCand);
+        persistEvents(mergedEvt);
+
+        const syncTime = data.lastSyncTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setSyncStatus({
+          isSyncing: false,
+          lastSync: syncTime,
+          error: null,
+        });
+      } else if (data.unconfigured) {
+        // Read local backup records if available; never show mock data
+        if (typeof window !== 'undefined') {
+          const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
+          const savedEvents = localStorage.getItem(STORAGE_KEY_REAL_EVENTS);
+          if (saved) setCandidates(JSON.parse(saved));
+          if (savedEvents) setCalendarEvents(JSON.parse(savedEvents));
+        }
+      } else {
+        throw new Error(data.error || 'Unable to load candidate data');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unable to load candidate data';
+      setLoadError(msg);
+      if (typeof window !== 'undefined') {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
+          if (saved) setCandidates(JSON.parse(saved));
+        } catch {}
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [candidates, calendarEvents, settings.appsScriptUrl, persistCandidates, persistEvents]);
+
+  // Initialization
+  useEffect(() => {
+    let initialUrl = '';
+    try {
+      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        setSettings(parsed);
+        if (parsed.appsScriptUrl) initialUrl = parsed.appsScriptUrl;
+      }
+    } catch {}
+
+    // Check server authentication
+    fetch('/api/auth/session')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.authenticated) {
+          setIsAuthenticated(true);
+        }
+      })
+      .catch(() => {});
+
+    fetchLatestData(initialUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Trigger sync with live Google Sheets
   const triggerSync = async () => {
+    const targetUrl = (settings.appsScriptUrl || '').trim();
+    if (!targetUrl) {
+      showToast('Please configure your Google Apps Script URL in Settings first.', 'error');
+      return;
+    }
+
     setSyncStatus((prev) => ({ ...prev, isSyncing: true, error: null }));
     try {
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: settings.appsScriptUrl }),
+        body: JSON.stringify({ appsScriptUrl: targetUrl }),
       });
 
       const data = await res.json();
@@ -204,13 +291,15 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       setSyncStatus({ isSyncing: false, lastSync: now, error: null });
 
       if (data.data && Array.isArray(data.data.candidates)) {
-        persistCandidates(data.data.candidates);
-        if (data.data.calendar) persistEvents(data.data.calendar);
+        const mergedCand = mergeCandidateRecords(candidates, data.data.candidates);
+        const mergedEvt = mergeEventRecords(calendarEvents, data.data.calendar || []);
+        persistCandidates(mergedCand);
+        persistEvents(mergedEvt);
       } else {
-        await fetchLatestData();
+        await fetchLatestData(targetUrl);
       }
 
-      showToast('Google Sheets synchronized successfully!', 'success');
+      showToast(`Google Sheets synced successfully. Last synced: ${now}`, 'success');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Synchronization failed';
       setSyncStatus((prev) => ({ ...prev, isSyncing: false, error: msg }));
@@ -218,24 +307,42 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Manually add candidate
+  // Manually add candidate (saved to Google Sheets immediately)
   const addCandidate = useCallback(
     async (candidate: Candidate) => {
       const updated = [candidate, ...candidates];
       persistCandidates(updated);
-      showToast(`Added candidate ${candidate.name}`, 'success');
+      showToast(`Candidate ${candidate.name} added`, 'success');
 
-      // Post to Google Apps Script if connected
-      fetch('/api/candidates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'ADD_CANDIDATE', candidate }),
-      }).catch(() => {});
+      // Post to Google Apps Script
+      const activeUrl = settings.appsScriptUrl.trim();
+      if (activeUrl) {
+        try {
+          const res = await fetch('/api/candidates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'ADD_CANDIDATE',
+              candidate,
+              appsScriptUrl: activeUrl,
+            }),
+          });
+          const result = await res.json();
+          if (result.success && result.id) {
+            // Update candidate ID if assigned by sheet
+            setCandidates((prev) =>
+              prev.map((c) => (c.id === candidate.id ? { ...c, id: result.id } : c))
+            );
+          }
+        } catch {
+          showToast('Failed to write candidate to Google Sheets directly. Local record retained.', 'info');
+        }
+      }
     },
-    [candidates, persistCandidates, showToast]
+    [candidates, settings.appsScriptUrl, persistCandidates, showToast]
   );
 
-  // Update candidate fields
+  // Update candidate fields (persisted to Google Sheets)
   const updateCandidate = useCallback(
     (id: string, updates: Partial<Candidate>, note?: string) => {
       const now = new Date().toLocaleString([], {
@@ -266,32 +373,38 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         });
 
         persistCandidates(updated);
-        setSelectedCandidate((curr) => (curr && curr.id === id ? { ...curr, ...updates, lastUpdated: now } : curr));
+        setSelectedCandidate((curr) =>
+          curr && curr.id === id ? { ...curr, ...updates, lastUpdated: now } : curr
+        );
         return updated;
       });
 
       showToast('Candidate updated successfully', 'success');
 
       // Send update to Google Apps Script
-      fetch('/api/candidates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'UPDATE_CANDIDATE',
-          candidateId: id,
-          updates: {
-            currentStatus: updates.currentStatus,
-            finalScore: updates.finalScore,
-            joiningDate: updates.joiningDate,
-            role: updates.role,
-            callReason: updates.callReason,
-            callStatus: updates.callStatus,
-            notes: note,
-          },
-        }),
-      }).catch(() => {});
+      const activeUrl = settings.appsScriptUrl.trim();
+      if (activeUrl) {
+        fetch('/api/candidates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'UPDATE_CANDIDATE',
+            candidateId: id,
+            updates: {
+              currentStatus: updates.currentStatus,
+              finalScore: updates.finalScore,
+              joiningDate: updates.joiningDate,
+              role: updates.role,
+              callReason: updates.callReason,
+              callStatus: updates.callStatus,
+              notes: note,
+            },
+            appsScriptUrl: activeUrl,
+          }),
+        }).catch(() => {});
+      }
     },
-    [persistCandidates, showToast]
+    [settings.appsScriptUrl, persistCandidates, showToast]
   );
 
   // Update stage in 3-round architecture
@@ -302,9 +415,9 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     [updateCandidate]
   );
 
-  // Add Calendar Event
+  // Add Calendar Event (persisted to Google Sheets)
   const addCalendarEvent = useCallback(
-    (eventData: Omit<CalendarEvent, 'id'>) => {
+    async (eventData: Omit<CalendarEvent, 'id'>) => {
       const newEvent: CalendarEvent = {
         id: `evt-${Date.now()}`,
         ...eventData,
@@ -314,13 +427,20 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       persistEvents(updated);
       showToast('Activity scheduled on calendar', 'success');
 
-      fetch('/api/candidates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'ADD_CALENDAR_EVENT', event: newEvent }),
-      }).catch(() => {});
+      const activeUrl = settings.appsScriptUrl.trim();
+      if (activeUrl) {
+        fetch('/api/candidates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'ADD_CALENDAR_EVENT',
+            event: newEvent,
+            appsScriptUrl: activeUrl,
+          }),
+        }).catch(() => {});
+      }
     },
-    [calendarEvents, persistEvents, showToast]
+    [calendarEvents, settings.appsScriptUrl, persistEvents, showToast]
   );
 
   // Update Call status and reason for Today's Dashboard
@@ -349,21 +469,25 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
           return updated;
         });
 
-        fetch('/api/candidates', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'UPDATE_CALL_STATUS',
-            eventId,
-            status: callStatus,
-            reason,
-          }),
-        }).catch(() => {});
+        const activeUrl = settings.appsScriptUrl.trim();
+        if (activeUrl) {
+          fetch('/api/candidates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'UPDATE_CALL_STATUS',
+              eventId,
+              status: callStatus,
+              reason,
+              appsScriptUrl: activeUrl,
+            }),
+          }).catch(() => {});
+        }
       }
 
       showToast(`Call status updated to ${callStatus}`, 'info');
     },
-    [updateCandidate, persistEvents, showToast]
+    [updateCandidate, settings.appsScriptUrl, persistEvents, showToast]
   );
 
   // Update Settings
@@ -376,9 +500,14 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         } catch {}
         return updated;
       });
+
+      if (newSettings.appsScriptUrl) {
+        fetchLatestData(newSettings.appsScriptUrl);
+      }
+
       showToast('Settings saved successfully', 'success');
     },
-    [showToast]
+    [fetchLatestData, showToast]
   );
 
   return (

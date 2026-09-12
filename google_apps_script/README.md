@@ -1,74 +1,48 @@
-# Sprix Hiring Platform - Google Sheets & Apps Script Setup
+# Sprix Hiring Platform - Production Google Sheets & Apps Script Setup
 
-This document explains how to connect your **Google Forms** and **Google Sheets** to the **Sprix Hiring Platform** without using any external databases.
-
----
-
-## 1. Create the Google Spreadsheet
-
-1. Open [Google Sheets](https://sheets.new) and create a new spreadsheet named:  
-   `Sprix Hiring Master Database 2026`
-2. Copy the **Spreadsheet ID** from the browser URL:  
-   `https://docs.google.com/spreadsheets/d/`**`<YOUR_SPREADSHEET_ID>`**`/edit`
+This document provides step-by-step instructions to connect your **real Google Forms** and **real Google Sheets** to the **Sprix Hiring Platform**.
 
 ---
 
-## 2. Install the Google Apps Script
-
-1. In your spreadsheet, click **Extensions** > **Apps Script**.
-2. Delete any existing code in `Code.gs`.
-3. Copy and paste the entire content of [`google_apps_script/Code.gs`](./Code.gs) into the editor.
-4. From the function dropdown at the top, select `setupSheets` and click **Run**.
-5. Grant the standard Google authorization when prompted.
-6. Check your spreadsheet: you will see 6 sheets automatically created and formatted with Sprix Blue headers:
-   - `Candidates`
-   - `Round2_Interviews`
-   - `Training`
-   - `Final_Evaluation`
-   - `Calendar`
-   - `Settings`
+## 1. Open Your Existing Google Spreadsheet
+1. Open the Google Spreadsheet where your **Sprix Japan Recruitment Form** responses land.
+2. Ensure you have your Form response sheet (e.g. `Form Responses 1` or `Candidates`).
 
 ---
 
-## 3. Deploy as a Web App
+## 2. Install & Update Google Apps Script
+1. In the spreadsheet menu, click **Extensions** > **Apps Script**.
+2. Replace all code in `Code.gs` with the code from [`google_apps_script/Code.gs`](./Code.gs).
+3. Save the project (`Ctrl + S`).
+4. In the toolbar function dropdown, select **`setupSprixSystem`** and click **Run**.
+5. When prompted, click **Review permissions** > choose your Google account > **Advanced** > **Go to Untitled project (unsafe)** > **Allow**.
+6. This safely creates the helper sheets without modifying or deleting your existing form responses:
+   - `Sprix_Candidate_Metadata` (for Status, Final Scores 0-10, Joining Dates, Call Reasons, Notes)
+   - `Sprix_Calendar` (for scheduled phone interviews, training, and calls)
+   - `Sprix_Manual_Candidates` (for candidates added directly via `+ Add Candidate`)
 
-1. In the Apps Script editor, click the blue **Deploy** button (top right) > **New deployment**.
+---
+
+## 3. Deploy as a Web App (Crucial Step)
+1. In the top-right corner of the Apps Script editor, click **Deploy** > **New deployment**.
 2. Click the gear icon next to "Select type" and choose **Web app**.
-3. Fill in:
-   - **Description**: `Sprix Hiring Platform API`
-   - **Execute as**: `Me (your google account)`
-   - **Who has access**: `Anyone` *(Note: this enables your Vercel server-side route handler to communicate with the sheet)*
+3. Configure the deployment settings:
+   - **Description**: `Sprix Production API v2.1`
+   - **Execute as**: **`Me (your email)`**
+   - **Who has access**: **`Anyone`** *(This allows the Next.js production server on Vercel to sync with the sheet)*
 4. Click **Deploy**.
-5. Copy the **Web App URL** (starts with `https://script.google.com/macros/s/.../exec`).
+5. Copy the generated **Web app URL** (ending with `/exec`).
+
+> [!IMPORTANT]
+> If you ever update code in `Code.gs` in the future, click **Deploy** > **Manage deployments** > click the pencil icon > change version to **New version** > click **Deploy**. This ensures the live URL serves your latest code.
 
 ---
 
-## 4. Configure in Sprix Platform
-
-You can connect in two ways:
-
-### Option A: In the Sprix Platform Settings UI (No redeploy needed)
-1. Open your Sprix Platform dashboard.
-2. Go to **Settings** (in the sidebar).
-3. Paste the **Apps Script Web App URL**, **Google Sheet ID**, and **Google Form ID**.
-4. Toggle from **Demo Mode** to **Live Google Sheets Mode**.
-5. Click **Save Settings** and **Test Connection**.
-
-### Option B: Via Environment Variables (for Vercel deployment)
-Add the following in your `.env.local` or Vercel Environment Variables:
-```env
-APP_PASSWORD=sprix2026
-GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
-GOOGLE_SHEET_ID=YOUR_SPREADSHEET_ID
-GOOGLE_FORM_ID=YOUR_GOOGLE_FORM_ID
-NEXT_PUBLIC_DEMO_MODE=false
-```
-
----
-
-## 5. Google Form Integration
-
-1. Create or open your Google Form for hiring applications.
-2. In the Form, go to the **Responses** tab and click **Link to Sheets**.
-3. Choose **Select existing spreadsheet** and choose your `Sprix Hiring Master Database 2026`.
-4. New candidates submitting the form will appear directly in the spreadsheet and will be fetched automatically by the Sprix Hiring Platform.
+## 4. Connect to Sprix Platform
+1. Open the Sprix Hiring Management platform (https://sprix-sales.vercel.app).
+2. Go to **Settings** in the sidebar.
+3. Paste the **Google Apps Script Web App URL**.
+4. Paste your **Google Sheet ID** and **Google Form URL**.
+5. Click **Test Connection** — verify that the sheet title and candidate count appear with a green checkmark.
+6. Click **Save Settings**.
+7. Click **Sync** in the top navigation bar to verify full data synchronization.

@@ -1,65 +1,81 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useHiring } from '@/context/HiringContext';
 import {
-  Settings,
   FileSpreadsheet,
-  Link,
   ShieldCheck,
-  CheckCircle2,
   RefreshCw,
+  CheckCircle2,
+  AlertCircle,
   ExternalLink,
 } from 'lucide-react';
 
 export default function SettingsView() {
-  const { settings, updateSettings, showToast } = useHiring();
+  const { settings, updateSettings, showToast, fetchLatestData } = useHiring();
 
   const [appsScriptUrl, setAppsScriptUrl] = useState(settings.appsScriptUrl || '');
   const [sheetId, setSheetId] = useState(settings.googleSheetId || '');
   const [sheetUrl, setSheetUrl] = useState(settings.googleSheetUrl || '');
   const [formId, setFormId] = useState(settings.googleFormId || '');
   const [formUrl, setFormUrl] = useState(settings.googleFormUrl || '');
-  const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [testStatus, setTestStatus] = useState<{ text: string; isSuccess: boolean } | null>(null);
   const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (settings.appsScriptUrl) setAppsScriptUrl(settings.appsScriptUrl);
+    if (settings.googleSheetId) setSheetId(settings.googleSheetId);
+    if (settings.googleSheetUrl) setSheetUrl(settings.googleSheetUrl);
+    if (settings.googleFormId) setFormId(settings.googleFormId);
+    if (settings.googleFormUrl) setFormUrl(settings.googleFormUrl);
+  }, [settings]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanUrl = appsScriptUrl.trim();
     updateSettings({
-      appsScriptUrl: appsScriptUrl.trim(),
+      appsScriptUrl: cleanUrl,
       googleSheetId: sheetId.trim(),
       googleSheetUrl: sheetUrl.trim(),
       googleFormId: formId.trim(),
       googleFormUrl: formUrl.trim(),
     });
+    if (cleanUrl) {
+      fetchLatestData(cleanUrl);
+    }
   };
 
   const handleTestConnection = async () => {
-    if (!appsScriptUrl.trim()) {
-      setTestStatus('Please enter your Google Apps Script URL first.');
+    const cleanUrl = appsScriptUrl.trim();
+    if (!cleanUrl) {
+      setTestStatus({ text: 'Please enter your Google Apps Script URL first.', isSuccess: false });
       return;
     }
 
     setTesting(true);
-    setTestStatus('Testing endpoint connection...');
+    setTestStatus({ text: 'Testing connection to Google Apps Script & Google Sheets...', isSuccess: false });
     try {
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: appsScriptUrl.trim() }),
+        body: JSON.stringify({ appsScriptUrl: cleanUrl }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setTestStatus('Connection successful! Google Apps Script is responding.');
-        showToast('Connected to Google Apps Script successfully!', 'success');
+        const sheetTitle = data.data?.sheetTitle || 'Google Sheet';
+        const count = data.data?.totalCandidates !== undefined ? data.data.totalCandidates : (data.data?.candidates?.length || 0);
+        const successMsg = `Connected successfully! Spreadsheet: "${sheetTitle}" (${count} candidate records loaded)`;
+        setTestStatus({ text: successMsg, isSuccess: true });
+        showToast('Google Apps Script connection verified!', 'success');
       } else {
-        setTestStatus(`Error: ${data.error || 'Connection failed'}`);
-        showToast(data.error || 'Connection failed', 'error');
+        const errorMsg = data.error || 'Connection failed';
+        setTestStatus({ text: `Error: ${errorMsg}`, isSuccess: false });
+        showToast(errorMsg, 'error');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network failure';
-      setTestStatus(`Failed to connect: ${msg}`);
-      showToast('Connection failed', 'error');
+      setTestStatus({ text: `Failed to connect: ${msg}`, isSuccess: false });
+      showToast('Connection failed: ' + msg, 'error');
     } finally {
       setTesting(false);
     }
@@ -102,7 +118,7 @@ export default function SettingsView() {
                 value={appsScriptUrl}
                 onChange={(e) => setAppsScriptUrl(e.target.value)}
                 placeholder="https://script.google.com/macros/s/AKfycb.../exec"
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:ring-2 focus:ring-[#01008A]/15 focus:border-[#01008A] focus:outline-none transition-all"
               />
               <p className="text-[11px] text-slate-400 mt-1">
                 URL of your deployed Google Apps Script (<code className="font-mono">google_apps_script/Code.gs</code>) deployed with access set to Anyone.
@@ -116,8 +132,8 @@ export default function SettingsView() {
                   type="text"
                   value={sheetId}
                   onChange={(e) => setSheetId(e.target.value)}
-                  placeholder="e.g. 1TOz0X0j9yjC6OR_rLo8oMm..."
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs"
+                  placeholder="e.g. 1E_WrVvh4LBCM60tfLjL3..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:ring-2 focus:ring-[#01008A]/15 focus:border-[#01008A] focus:outline-none transition-all"
                 />
               </div>
 
@@ -128,7 +144,7 @@ export default function SettingsView() {
                   value={sheetUrl}
                   onChange={(e) => setSheetUrl(e.target.value)}
                   placeholder="https://docs.google.com/spreadsheets/d/..."
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-[#01008A]/15 focus:border-[#01008A] focus:outline-none transition-all"
                 />
               </div>
             </div>
@@ -140,8 +156,8 @@ export default function SettingsView() {
                   type="text"
                   value={formId}
                   onChange={(e) => setFormId(e.target.value)}
-                  placeholder="e.g. 1FAIpQLScSprix..."
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs"
+                  placeholder="e.g. 1FAIpQLSfAGnQDROOOR..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:ring-2 focus:ring-[#01008A]/15 focus:border-[#01008A] focus:outline-none transition-all"
                 />
               </div>
 
@@ -151,28 +167,41 @@ export default function SettingsView() {
                   type="url"
                   value={formUrl}
                   onChange={(e) => setFormUrl(e.target.value)}
-                  placeholder="https://docs.google.com/forms/d/..."
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  placeholder="https://forms.gle/..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-[#01008A]/15 focus:border-[#01008A] focus:outline-none transition-all"
                 />
               </div>
             </div>
 
             {/* Test Connection Button */}
-            <div className="pt-2 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={handleTestConnection}
-                disabled={testing}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
-                <span>Test Connection</span>
-              </button>
+            <div className="pt-2 space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={testing}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
+                  <span>{testing ? 'Verifying...' : 'Test Connection'}</span>
+                </button>
+              </div>
 
               {testStatus && (
-                <span className="text-xs font-medium text-slate-600">
-                  {testStatus}
-                </span>
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-start gap-2 border ${
+                    testStatus.isSuccess
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  {testStatus.isSuccess ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="leading-relaxed">{testStatus.text}</div>
+                </div>
               )}
             </div>
           </div>

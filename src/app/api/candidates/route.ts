@@ -1,30 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET() {
-  const appsScriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const paramUrl = searchParams.get('appsScriptUrl');
+  const headerUrl = req.headers.get('x-apps-script-url');
+  const appsScriptUrl = (paramUrl || headerUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
 
   if (appsScriptUrl) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
       const res = await fetch(appsScriptUrl, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Accept': 'application/json, text/plain, */*' },
+        signal: controller.signal,
+        redirect: 'follow',
         cache: 'no-store',
       });
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
-        throw new Error(`Google Apps Script responded with ${res.status}`);
+        throw new Error(`Google Apps Script responded with HTTP ${res.status}`);
       }
 
-      const data = await res.json();
+      const rawText = await res.text();
+      if (rawText.includes('<!DOCTYPE html>') || rawText.includes('<html')) {
+        throw new Error('Google Apps Script returned HTML instead of JSON. Ensure deployment access is set to "Anyone".');
+      }
+
+      const data = JSON.parse(rawText);
       if (data.success) {
         return NextResponse.json({
           success: true,
           candidates: data.candidates || [],
           calendar: data.calendar || [],
-          totalCandidates: data.totalCandidates || 0,
+          totalCandidates: data.totalCandidates || (data.candidates ? data.candidates.length : 0),
           sheetTitle: data.sheetTitle || 'Google Sheet',
           lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
+      } else {
+        throw new Error(data.error || 'Google Apps Script returned an error response');
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to reach Google Apps Script';
@@ -37,7 +56,7 @@ export async function GET() {
     }
   }
 
-  // Not connected yet - return clean empty state, NEVER fake data
+  // If no endpoint configured yet, return clean empty state without mock data
   return NextResponse.json({
     success: false,
     unconfigured: true,
@@ -51,24 +70,44 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const appsScriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    const { searchParams } = new URL(req.url);
+    const paramUrl = searchParams.get('appsScriptUrl');
+    const headerUrl = req.headers.get('x-apps-script-url');
+    const appsScriptUrl = (body.appsScriptUrl || paramUrl || headerUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
 
     if (appsScriptUrl) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+      // Clean body to send to Google Apps Script
+      const scriptPayload = { ...body };
+      delete scriptPayload.appsScriptUrl;
+
       const res = await fetch(appsScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(scriptPayload),
+        signal: controller.signal,
+        redirect: 'follow',
       });
+      clearTimeout(timeoutId);
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(`Google Apps Script returned non-JSON response: ${rawText.slice(0, 100)}`);
+      }
+
       return NextResponse.json(data);
     }
 
     return NextResponse.json({
-      success: true,
-      message: 'Local update recorded. Configure GOOGLE_APPS_SCRIPT_URL to persist to Google Sheets.',
+      success: false,
+      error: 'Google Apps Script URL is not configured. Unable to persist mutation to Google Sheets.',
       action: body.action,
-    });
+    }, { status: 400 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Action failed';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
