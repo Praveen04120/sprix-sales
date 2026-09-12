@@ -9,6 +9,12 @@ import {
   AdminNote,
 } from '@/types';
 import { initialSettings } from '@/data/seedData';
+import {
+  safeString,
+  safeLower,
+  normalizeCandidate,
+  normalizeCalendarEvent,
+} from '@/lib/normalize';
 
 interface ToastState {
   id: string;
@@ -57,34 +63,40 @@ const STORAGE_KEY_REAL_EVENTS = 'sprix_prod_calendar_events';
 const STORAGE_KEY_SETTINGS = 'sprix_prod_settings';
 
 /**
- * Merge candidate lists stably without producing duplicates.
- * Prioritizes Candidate ID, then Email.
+ * Merge candidate lists stably without producing duplicates or crashing on non-string types.
  */
 function mergeCandidateRecords(existing: Candidate[], incoming: Candidate[]): Candidate[] {
   const map = new Map<string, Candidate>();
 
-  // Add existing candidates to map
-  for (const c of existing) {
-    const key = (c.id || c.email || '').trim().toLowerCase();
+  // Add existing candidates to map, normalizing every item
+  for (let i = 0; i < existing.length; i++) {
+    const c = normalizeCandidate(existing[i], i);
+    const key = safeLower(c.id) || safeLower(c.email);
     if (key) map.set(key, c);
   }
 
   // Merge incoming candidates from Google Sheets
-  for (const inc of incoming) {
-    const key = (inc.id || inc.email || '').trim().toLowerCase();
+  for (let j = 0; j < incoming.length; j++) {
+    const inc = normalizeCandidate(incoming[j], existing.length + j);
+    const key = safeLower(inc.id) || safeLower(inc.email);
     if (!key) continue;
 
     const prev = map.get(key);
     if (prev) {
       // Merge admin notes without duplicates
       const noteMap = new Map<string, AdminNote>();
-      (prev.adminNotes || []).forEach(n => noteMap.set(n.id || n.note, n));
-      (inc.adminNotes || []).forEach(n => noteMap.set(n.id || n.note, n));
+      (prev.adminNotes || []).forEach((n) => {
+        const nKey = safeString(n.id) || safeString(n.note);
+        if (nKey) noteMap.set(nKey, n);
+      });
+      (inc.adminNotes || []).forEach((n) => {
+        const nKey = safeString(n.id) || safeString(n.note);
+        if (nKey) noteMap.set(nKey, n);
+      });
 
       map.set(key, {
         ...prev,
         ...inc,
-        // Preserve local overrides if sheet hasn't recorded them yet
         currentStatus: inc.currentStatus || prev.currentStatus,
         finalScore: inc.finalScore !== null && inc.finalScore !== undefined ? inc.finalScore : prev.finalScore,
         adminNotes: Array.from(noteMap.values()),
@@ -102,16 +114,19 @@ function mergeCandidateRecords(existing: Candidate[], incoming: Candidate[]): Ca
 }
 
 /**
- * Merge calendar events stably without duplicates.
+ * Merge calendar events stably without duplicates or crashing on non-string types.
  */
 function mergeEventRecords(existing: CalendarEvent[], incoming: CalendarEvent[]): CalendarEvent[] {
   const map = new Map<string, CalendarEvent>();
-  for (const e of existing) {
-    if (e.id) map.set(e.id, e);
+  for (let i = 0; i < existing.length; i++) {
+    const e = normalizeCalendarEvent(existing[i], i);
+    if (e.id) map.set(safeString(e.id), e);
   }
-  for (const inc of incoming) {
+  for (let j = 0; j < incoming.length; j++) {
+    const inc = normalizeCalendarEvent(incoming[j], existing.length + j);
     if (inc.id) {
-      map.set(inc.id, { ...(map.get(inc.id) || {}), ...inc });
+      const existingEvt = map.get(safeString(inc.id));
+      map.set(safeString(inc.id), existingEvt ? { ...existingEvt, ...inc } : inc);
     }
   }
   return Array.from(map.values());
@@ -163,16 +178,18 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
 
   // Persist real candidates to memory & local backup
   const persistCandidates = useCallback((newCandidates: Candidate[]) => {
-    setCandidates(newCandidates);
+    const normalized = newCandidates.map((c, idx) => normalizeCandidate(c, idx));
+    setCandidates(normalized);
     try {
-      localStorage.setItem(STORAGE_KEY_REAL_CANDIDATES, JSON.stringify(newCandidates));
+      localStorage.setItem(STORAGE_KEY_REAL_CANDIDATES, JSON.stringify(normalized));
     } catch {}
   }, []);
 
   const persistEvents = useCallback((newEvents: CalendarEvent[]) => {
-    setCalendarEvents(newEvents);
+    const normalized = newEvents.map((e, idx) => normalizeCalendarEvent(e, idx));
+    setCalendarEvents(normalized);
     try {
-      localStorage.setItem(STORAGE_KEY_REAL_EVENTS, JSON.stringify(newEvents));
+      localStorage.setItem(STORAGE_KEY_REAL_EVENTS, JSON.stringify(normalized));
     } catch {}
   }, []);
 
@@ -181,30 +198,33 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     setLoadError(null);
     try {
-      let activeUrl = overrideUrl || settings.appsScriptUrl;
+      let activeUrl = safeString(overrideUrl) || safeString(settings.appsScriptUrl);
       if (!activeUrl && typeof window !== 'undefined') {
         try {
           const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
           if (savedSettings) {
             const parsed = JSON.parse(savedSettings);
-            if (parsed.appsScriptUrl) activeUrl = parsed.appsScriptUrl;
+            if (parsed.appsScriptUrl) activeUrl = safeString(parsed.appsScriptUrl);
           }
         } catch {}
       }
 
       const queryUrl = activeUrl
-        ? `/api/candidates?appsScriptUrl=${encodeURIComponent(activeUrl.trim())}`
+        ? `/api/candidates?appsScriptUrl=${encodeURIComponent(activeUrl)}`
         : '/api/candidates';
 
       const res = await fetch(queryUrl, {
         cache: 'no-store',
-        headers: activeUrl ? { 'x-apps-script-url': activeUrl.trim() } : {},
+        headers: activeUrl ? { 'x-apps-script-url': activeUrl } : {},
       });
       const data = await res.json();
 
       if (data.success && Array.isArray(data.candidates)) {
-        const mergedCand = mergeCandidateRecords(candidates, data.candidates);
-        const mergedEvt = mergeEventRecords(calendarEvents, data.calendar || []);
+        const rawIncomingCand = data.candidates.map((c: any, idx: number) => normalizeCandidate(c, idx));
+        const rawIncomingEvt = (data.calendar || []).map((e: any, idx: number) => normalizeCalendarEvent(e, idx));
+
+        const mergedCand = mergeCandidateRecords(candidates, rawIncomingCand);
+        const mergedEvt = mergeEventRecords(calendarEvents, rawIncomingEvt);
 
         persistCandidates(mergedCand);
         persistEvents(mergedEvt);
@@ -220,8 +240,22 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         if (typeof window !== 'undefined') {
           const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
           const savedEvents = localStorage.getItem(STORAGE_KEY_REAL_EVENTS);
-          if (saved) setCandidates(JSON.parse(saved));
-          if (savedEvents) setCalendarEvents(JSON.parse(savedEvents));
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                setCandidates(parsed.map((c, idx) => normalizeCandidate(c, idx)));
+              }
+            } catch {}
+          }
+          if (savedEvents) {
+            try {
+              const parsedEvts = JSON.parse(savedEvents);
+              if (Array.isArray(parsedEvts)) {
+                setCalendarEvents(parsedEvts.map((e, idx) => normalizeCalendarEvent(e, idx)));
+              }
+            } catch {}
+          }
         }
       } else {
         throw new Error(data.error || 'Unable to load candidate data');
@@ -232,7 +266,12 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       if (typeof window !== 'undefined') {
         try {
           const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
-          if (saved) setCandidates(JSON.parse(saved));
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              setCandidates(parsed.map((c, idx) => normalizeCandidate(c, idx)));
+            }
+          }
         } catch {}
       }
     } finally {
@@ -248,7 +287,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         setSettings(parsed);
-        if (parsed.appsScriptUrl) initialUrl = parsed.appsScriptUrl;
+        if (parsed.appsScriptUrl) initialUrl = safeString(parsed.appsScriptUrl);
       }
     } catch {}
 
@@ -266,9 +305,9 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Trigger sync with live Google Sheets
+  // Trigger sync with live Google Sheets (Strictly READ-ONLY on Google Sheet)
   const triggerSync = async () => {
-    const targetUrl = (settings.appsScriptUrl || '').trim();
+    const targetUrl = safeString(settings.appsScriptUrl);
     if (!targetUrl) {
       showToast('Please configure your Google Apps Script URL in Settings first.', 'error');
       return;
@@ -291,8 +330,11 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       setSyncStatus({ isSyncing: false, lastSync: now, error: null });
 
       if (data.data && Array.isArray(data.data.candidates)) {
-        const mergedCand = mergeCandidateRecords(candidates, data.data.candidates);
-        const mergedEvt = mergeEventRecords(calendarEvents, data.data.calendar || []);
+        const incomingCand = data.data.candidates.map((c: any, idx: number) => normalizeCandidate(c, idx));
+        const incomingEvt = (data.data.calendar || []).map((e: any, idx: number) => normalizeCalendarEvent(e, idx));
+
+        const mergedCand = mergeCandidateRecords(candidates, incomingCand);
+        const mergedEvt = mergeEventRecords(calendarEvents, incomingEvt);
         persistCandidates(mergedCand);
         persistEvents(mergedEvt);
       } else {
@@ -307,15 +349,16 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Manually add candidate (saved to Google Sheets immediately)
+  // Manually add candidate
   const addCandidate = useCallback(
     async (candidate: Candidate) => {
-      const updated = [candidate, ...candidates];
+      const normalized = normalizeCandidate(candidate, candidates.length);
+      const updated = [normalized, ...candidates];
       persistCandidates(updated);
-      showToast(`Candidate ${candidate.name} added`, 'success');
+      showToast(`Candidate ${normalized.name} added`, 'success');
 
       // Post to Google Apps Script
-      const activeUrl = settings.appsScriptUrl.trim();
+      const activeUrl = safeString(settings.appsScriptUrl);
       if (activeUrl) {
         try {
           const res = await fetch('/api/candidates', {
@@ -323,15 +366,14 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action: 'ADD_CANDIDATE',
-              candidate,
+              candidate: normalized,
               appsScriptUrl: activeUrl,
             }),
           });
           const result = await res.json();
           if (result.success && result.id) {
-            // Update candidate ID if assigned by sheet
             setCandidates((prev) =>
-              prev.map((c) => (c.id === candidate.id ? { ...c, id: result.id } : c))
+              prev.map((c) => (c.id === normalized.id ? { ...c, id: safeString(result.id) } : c))
             );
           }
         } catch {
@@ -342,7 +384,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     [candidates, settings.appsScriptUrl, persistCandidates, showToast]
   );
 
-  // Update candidate fields (persisted to Google Sheets)
+  // Update candidate fields
   const updateCandidate = useCallback(
     (id: string, updates: Partial<Candidate>, note?: string) => {
       const now = new Date().toLocaleString([], {
@@ -352,29 +394,31 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         minute: '2-digit',
       });
 
+      const safeId = safeString(id);
+
       setCandidates((prev) => {
         const updated = prev.map((c) => {
-          if (c.id !== id) return c;
+          if (safeString(c.id) !== safeId) return c;
           const newNotes = [...(c.adminNotes || [])];
-          if (note) {
+          if (note && safeString(note)) {
             newNotes.unshift({
               id: Math.random().toString(36).substring(2, 9),
               timestamp: now,
               author: 'Admin',
-              note,
+              note: safeString(note),
             });
           }
-          return {
+          return normalizeCandidate({
             ...c,
             ...updates,
             lastUpdated: now,
             adminNotes: newNotes,
-          };
+          });
         });
 
         persistCandidates(updated);
         setSelectedCandidate((curr) =>
-          curr && curr.id === id ? { ...curr, ...updates, lastUpdated: now } : curr
+          curr && safeString(curr.id) === safeId ? { ...curr, ...updates, lastUpdated: now } : curr
         );
         return updated;
       });
@@ -382,14 +426,14 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       showToast('Candidate updated successfully', 'success');
 
       // Send update to Google Apps Script
-      const activeUrl = settings.appsScriptUrl.trim();
+      const activeUrl = safeString(settings.appsScriptUrl);
       if (activeUrl) {
         fetch('/api/candidates', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'UPDATE_CANDIDATE',
-            candidateId: id,
+            candidateId: safeId,
             updates: {
               currentStatus: updates.currentStatus,
               finalScore: updates.finalScore,
@@ -415,19 +459,19 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
     [updateCandidate]
   );
 
-  // Add Calendar Event (persisted to Google Sheets)
+  // Add Calendar Event
   const addCalendarEvent = useCallback(
     async (eventData: Omit<CalendarEvent, 'id'>) => {
-      const newEvent: CalendarEvent = {
+      const newEvent: CalendarEvent = normalizeCalendarEvent({
         id: `evt-${Date.now()}`,
         ...eventData,
-      };
+      });
 
       const updated = [newEvent, ...calendarEvents];
       persistEvents(updated);
       showToast('Activity scheduled on calendar', 'success');
 
-      const activeUrl = settings.appsScriptUrl.trim();
+      const activeUrl = safeString(settings.appsScriptUrl);
       if (activeUrl) {
         fetch('/api/candidates', {
           method: 'POST',
@@ -454,31 +498,32 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       // Update candidate record
       updateCandidate(candidateId, {
         callStatus,
-        ...(reason ? { callReason: reason } : {}),
+        ...(reason ? { callReason: safeString(reason) } : {}),
       });
 
       // Update calendar event if matched
       if (eventId) {
+        const safeEvtId = safeString(eventId);
         setCalendarEvents((prev) => {
           const updated = prev.map((e) =>
-            e.id === eventId
-              ? { ...e, status: callStatus, ...(reason ? { reason } : {}) }
+            safeString(e.id) === safeEvtId
+              ? { ...e, status: callStatus, ...(reason ? { reason: safeString(reason) } : {}) }
               : e
           );
           persistEvents(updated);
           return updated;
         });
 
-        const activeUrl = settings.appsScriptUrl.trim();
+        const activeUrl = safeString(settings.appsScriptUrl);
         if (activeUrl) {
           fetch('/api/candidates', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action: 'UPDATE_CALL_STATUS',
-              eventId,
+              eventId: safeEvtId,
               status: callStatus,
-              reason,
+              reason: safeString(reason),
               appsScriptUrl: activeUrl,
             }),
           }).catch(() => {});
@@ -502,7 +547,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (newSettings.appsScriptUrl) {
-        fetchLatestData(newSettings.appsScriptUrl);
+        fetchLatestData(safeString(newSettings.appsScriptUrl));
       }
 
       showToast('Settings saved successfully', 'success');

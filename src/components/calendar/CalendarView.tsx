@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useHiring } from '@/context/HiringContext';
 import { CalendarEvent, Candidate } from '@/types';
+import { safeString } from '@/lib/normalize';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -75,8 +76,8 @@ export default function CalendarView() {
       endDate: eventType === 'TRAINING' ? (endDate || startDate) : undefined,
       startTime,
       endTime,
-      reason: eventNotes || `${eventType.replace('_', ' ')} with ${cand.name}`,
-      notes: eventNotes || `${eventType.replace('_', ' ')} with ${cand.name}`,
+      reason: eventNotes || `${safeString(eventType).replace(/_/g, ' ')} with ${cand.name}`,
+      notes: eventNotes || `${safeString(eventType).replace(/_/g, ' ')} with ${cand.name}`,
       status: 'Scheduled',
     });
 
@@ -301,7 +302,7 @@ export default function CalendarView() {
                         <span className="text-xs font-bold text-slate-900">{evt.candidateName}</span>
                         <span className="text-[11px] font-mono text-slate-400">{evt.candidateId}</span>
                         <span className="text-[11px] font-semibold px-2 py-0.2 rounded-full bg-slate-100 text-slate-600">
-                          {evt.type.replace('_', ' ')}
+                          {safeString(evt.type).replace(/_/g, ' ')}
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5">{evt.notes}</p>

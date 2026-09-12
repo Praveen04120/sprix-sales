@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useHiring } from '@/context/HiringContext';
+import { safeString } from '@/lib/normalize';
 import {
   Calendar as CalendarIcon,
   PhoneCall,
@@ -244,7 +245,7 @@ export default function TodayView() {
                         {evt.candidateName}
                       </span>
                       <span className="text-[11px] font-semibold px-2 py-0.2 rounded-full bg-slate-200 text-slate-700">
-                        {evt.type.replace('_', ' ')}
+                        {safeString(evt.type).replace(/_/g, ' ')}
                       </span>
                     </div>
 

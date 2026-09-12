@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useHiring } from '@/context/HiringContext';
 import { Candidate, Stage, CandidateStatus } from '@/types';
+import { safeString } from '@/lib/normalize';
 import {
   X,
   Phone,
@@ -53,7 +54,7 @@ export default function CandidateDetailDrawer({ candidate, onClose }: CandidateD
     setNewNote('');
   };
 
-  const cleanPhone = (candidate.phone || '').replace(/[^0-9+]/g, '');
+  const cleanPhone = safeString(candidate.phone).replace(/[^0-9+]/g, '');
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-fade-in">
@@ -62,7 +63,7 @@ export default function CandidateDetailDrawer({ candidate, onClose }: CandidateD
         <div className="px-6 py-4 bg-gradient-to-r from-[#01008A] to-[#000066] text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center font-bold text-lg text-[#FF0198] border border-white/20">
-              {candidate.name ? candidate.name.charAt(0) : 'C'}
+              {safeString(candidate.name).charAt(0) || 'C'}
             </div>
             <div>
               <div className="flex items-center gap-2">

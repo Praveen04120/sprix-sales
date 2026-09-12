@@ -15,9 +15,9 @@ import {
 export default function GoogleFormsView() {
   const { settings, triggerSync, syncStatus, candidates, setActiveTab } = useHiring();
 
-  const formUrl = settings.googleFormUrl || '';
-  const editUrl = formUrl.replace('/viewform', '/edit');
-  const sheetUrl = settings.googleSheetUrl || '';
+  const formUrl = typeof settings.googleFormUrl === 'string' ? settings.googleFormUrl : '';
+  const editUrl = formUrl ? formUrl.replace('/viewform', '/edit') : '';
+  const sheetUrl = typeof settings.googleSheetUrl === 'string' ? settings.googleSheetUrl : '';
 
   return (
     <div className="space-y-6 pb-12">

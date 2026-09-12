@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useHiring } from '@/context/HiringContext';
 import { Candidate } from '@/types';
+import { matchesCandidateQuery } from '@/lib/normalize';
 import {
   FileSpreadsheet,
   CheckCircle2,
@@ -22,14 +23,8 @@ export default function Round1View() {
   const round1Candidates = candidates.filter((c) => {
     if (c.currentStage !== 'ROUND_1') return false;
     if (filter !== 'All' && c.currentStatus !== filter) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      return (
-        (c.name || '').toLowerCase().includes(q) ||
-        (c.id || '').toLowerCase().includes(q) ||
-        (c.phone || '').toLowerCase().includes(q) ||
-        (c.email || '').toLowerCase().includes(q)
-      );
+    if (search) {
+      return matchesCandidateQuery(c, search);
     }
     return true;
   });

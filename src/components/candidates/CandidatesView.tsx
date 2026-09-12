@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import { useHiring } from '@/context/HiringContext';
 import { Candidate, Stage, CandidateStatus } from '@/types';
+import { matchesCandidateQuery, safeString, safeLower } from '@/lib/normalize';
 import {
   Search,
   Plus,
@@ -78,14 +79,9 @@ export default function CandidatesView() {
         }
       }
 
-      // Search across Name, Phone, Email
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesName = (c.name || '').toLowerCase().includes(q);
-        const matchesPhone = (c.phone || '').toLowerCase().includes(q);
-        const matchesEmail = (c.email || '').toLowerCase().includes(q);
-        const matchesId = (c.id || '').toLowerCase().includes(q);
-        if (!matchesName && !matchesPhone && !matchesEmail && !matchesId) {
+      // Search across Name, Phone, Email, ID safely
+      if (searchQuery) {
+        if (!matchesCandidateQuery(c, searchQuery)) {
           return false;
         }
       }
@@ -170,21 +166,21 @@ export default function CandidatesView() {
   const exportCSV = () => {
     const headers = ['ID', 'Name', 'Phone', 'Email', 'Location', 'Role', 'Status', 'Joining Date', 'Final Score'];
     const rows = filteredCandidates.map((c) => [
-      c.id,
-      `"${c.name}"`,
-      `"${c.phone}"`,
-      `"${c.email}"`,
-      `"${c.location || ''}"`,
-      `"${c.role || ''}"`,
-      c.currentStatus,
-      c.joiningDate || '',
-      c.finalScore !== null && c.finalScore !== undefined ? c.finalScore : '',
+      safeString(c.id),
+      `"${safeString(c.name)}"`,
+      `"${safeString(c.phone)}"`,
+      `"${safeString(c.email)}"`,
+      `"${safeString(c.location)}"`,
+      `"${safeString(c.role)}"`,
+      safeString(c.currentStatus),
+      safeString(c.joiningDate),
+      c.finalScore !== null && c.finalScore !== undefined ? String(c.finalScore) : '',
     ]);
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
     const link = document.createElement('a');
     link.href = encodeURI(csvContent);
-    link.download = `sprix_candidates_${statusFilter.toLowerCase().replace(/\s+/g, '_')}.csv`;
+    link.download = `sprix_candidates_${safeLower(statusFilter).replace(/\s+/g, '_')}.csv`;
     link.click();
     showToast('Exported CSV file', 'info');
   };
