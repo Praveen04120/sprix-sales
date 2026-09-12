@@ -58,7 +58,10 @@ export default function SettingsView() {
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: cleanUrl }),
+        body: JSON.stringify({ 
+          appsScriptUrl: cleanUrl,
+          sheetId: sheetId.trim()
+        }),
       });
       const data = await res.json();
       if (res.ok && data.success) {

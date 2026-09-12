@@ -3,18 +3,33 @@ import { NextRequest, NextResponse } from 'next/server';
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_SHEET_ID = '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ';
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const paramUrl = searchParams.get('appsScriptUrl');
   const headerUrl = req.headers.get('x-apps-script-url');
   const appsScriptUrl = (paramUrl || headerUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
 
+  const paramSheetId = searchParams.get('sheetId');
+  const headerSheetId = req.headers.get('x-sheet-id');
+  const sheetId = (paramSheetId || headerSheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
+
   if (appsScriptUrl) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-      const res = await fetch(appsScriptUrl, {
+      let fetchUrl = appsScriptUrl;
+      try {
+        const urlObj = new URL(appsScriptUrl);
+        if (sheetId && !urlObj.searchParams.has('sheetId')) {
+          urlObj.searchParams.set('sheetId', sheetId);
+        }
+        fetchUrl = urlObj.toString();
+      } catch {}
+
+      const res = await fetch(fetchUrl, {
         method: 'GET',
         headers: { 'Accept': 'application/json, text/plain, */*' },
         signal: controller.signal,
@@ -40,6 +55,7 @@ export async function GET(req: NextRequest) {
           calendar: data.calendar || [],
           totalCandidates: data.totalCandidates || (data.candidates ? data.candidates.length : 0),
           sheetTitle: data.sheetTitle || 'Google Sheet',
+          sheetId: data.sheetId || sheetId,
           lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
       } else {
@@ -75,6 +91,10 @@ export async function POST(req: NextRequest) {
     const headerUrl = req.headers.get('x-apps-script-url');
     const appsScriptUrl = (body.appsScriptUrl || paramUrl || headerUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
 
+    const paramSheetId = searchParams.get('sheetId');
+    const headerSheetId = req.headers.get('x-sheet-id');
+    const sheetId = (body.sheetId || paramSheetId || headerSheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
+
     if (appsScriptUrl) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 45000);
@@ -82,6 +102,9 @@ export async function POST(req: NextRequest) {
       // Clean body to send to Google Apps Script
       const scriptPayload = { ...body };
       delete scriptPayload.appsScriptUrl;
+      if (sheetId && !scriptPayload.sheetId) {
+        scriptPayload.sheetId = sheetId;
+      }
 
       const res = await fetch(appsScriptUrl, {
         method: 'POST',

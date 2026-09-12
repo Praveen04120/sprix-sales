@@ -1,29 +1,33 @@
 /**
  * SPRIX SALES HIRING PLATFORM - PRODUCTION GOOGLE APPS SCRIPT API
  * 
- * Version: 2.1.0 (Production / Real Data)
+ * Version: 2.2.0 (Production / Explicit Spreadsheet ID Access)
  * Purpose: Connects real Google Forms & Google Sheets to Sprix Hiring Management.
  * 
- * ARCHITECTURE:
- * 1. Read-only on Form Responses: Never mutates or overwrites Google Form responses.
- * 2. Internal Metadata Sheet: Tracks Status, Final Scores (0-10), Joining Dates, Roles, Notes.
- * 3. Calendar Sheet: Persists all scheduled calls, phone interviews, training sessions.
- * 4. Manual Candidates Sheet: Persists candidates created via "+ Add Candidate".
- * 5. Standalone & Bound Support: Auto-detects active spreadsheet or opens via sheetId param.
+ * ARCHITECTURE & DATA SAFETY:
+ * 1. Explicit Spreadsheet ID: Opens target spreadsheet using SpreadsheetApp.openById().
+ *    Zero dependency on active spreadsheet UI container context (robust for standalone Web Apps).
+ * 2. Strictly Read-Only Sync: Normal sync & data fetches NEVER mutate, append, or delete real form responses.
+ * 3. Separate Internal Sheets:
+ *    - Sprix_Candidate_Metadata: Tracks Status, Final Scores (0-10), Joining Dates, Roles, Notes.
+ *    - Sprix_Calendar: Persists all scheduled calls, phone interviews, training sessions.
+ *    - Sprix_Manual_Candidates: Persists candidates created via "+ Add Candidate".
+ * 4. Test Environment Isolation: Mutation actions accept an optional `sheetId` parameter to test against a separate test sheet.
  * 
  * SETUP INSTRUCTIONS:
  * 1. Open your Google Spreadsheet (where Google Form responses land).
  * 2. Click: Extensions > Apps Script.
  * 3. Replace all contents of Code.gs with this code and save (Ctrl+S).
- * 4. In the toolbar, select "setupSprixSystem" and click "Run" once to prepare helper sheets.
- * 5. Click "Deploy" > "New deployment"
- *    - Type: "Web app"
- *    - Description: "Sprix Production API v2.1"
- *    - Execute as: "Me (your email)"
- *    - Who has access: "Anyone"
- * 6. Click "Deploy", authorize permissions if prompted, and copy the Web App URL.
- * 7. Paste the Web App URL into your Sprix Platform Settings.
+ * 4. In the toolbar function dropdown, select "testSpreadsheetAccess" and click "Run".
+ *    - Click "Review permissions" > choose your Google account > "Advanced" > "Go to Untitled project (unsafe)" > "Allow".
+ *    - This grants the required https://www.googleapis.com/auth/spreadsheets permission.
+ * 5. In the toolbar, select "setupSprixSystem" and click "Run" once to prepare helper sheets if needed.
+ * 6. Click "Deploy" > "Manage deployments" > click pencil icon > Version: "New version" > click "Deploy".
+ *    (Or click "Deploy" > "New deployment" > Web app > Execute as "Me", Access "Anyone").
+ * 7. Copy the Web App URL and paste it into your Sprix Platform Settings.
  */
+
+var DEFAULT_SPREADSHEET_ID = '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ';
 
 var INTERNAL_SHEETS = {
   CALENDAR: 'Sprix_Calendar',
@@ -32,13 +36,42 @@ var INTERNAL_SHEETS = {
 };
 
 /**
+ * Diagnostic test function: Run directly from Apps Script editor toolbar.
+ * Authorizes permissions and verifies explicit read access to the recruitment spreadsheet.
+ */
+function testSpreadsheetAccess() {
+  Logger.log('Testing explicit access to Google Sheet ID: ' + DEFAULT_SPREADSHEET_ID);
+  try {
+    var ss = SpreadsheetApp.openById(DEFAULT_SPREADSHEET_ID);
+    var name = ss.getName();
+    var sheets = ss.getSheets();
+    Logger.log('SUCCESS: Opened spreadsheet "' + name + '"');
+    Logger.log('Detected ' + sheets.length + ' sheet tabs:');
+    for (var i = 0; i < sheets.length; i++) {
+      Logger.log('  [' + (i + 1) + '] "' + sheets[i].getName() + '" (' + sheets[i].getLastRow() + ' rows, ' + sheets[i].getLastColumn() + ' cols)');
+    }
+    return {
+      success: true,
+      sheetTitle: name,
+      totalSheets: sheets.length,
+      sheets: sheets.map(function(s) { return s.getName(); })
+    };
+  } catch (err) {
+    var errDetail = err.message || err.toString();
+    Logger.log('ERROR opening spreadsheet: ' + errDetail);
+    throw new Error('SpreadsheetApp.openById failed: ' + errDetail);
+  }
+}
+
+/**
  * Run setup once to prepare the Calendar, metadata, and manual candidate helper sheets.
  * Existing form responses and existing sheets are completely untouched.
  */
 function setupSprixSystem() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var resolved = resolveSpreadsheet(null);
+  var ss = resolved.spreadsheet;
   if (!ss) {
-    Logger.log('Please run setupSprixSystem from the spreadsheet container.');
+    Logger.log('setupSprixSystem failed: ' + resolved.error);
     return;
   }
   
@@ -101,11 +134,14 @@ function setupSprixSystem() {
 
 /**
  * Handle HTTP GET: Reads real candidates and calendar records from spreadsheet.
+ * STRICTLY READ ONLY — Zero rows appended, updated, or deleted.
  */
 function doGet(e) {
   try {
-    // Fast ping response for healthcheck
-    if (e && e.parameter && e.parameter.action === 'ping') {
+    var params = (e && e.parameter) ? e.parameter : {};
+
+    // 1. Fast ping response for healthcheck
+    if (params.action === 'ping') {
       return jsonResponse({
         success: true,
         message: 'Sprix Google Apps Script API is active',
@@ -113,14 +149,36 @@ function doGet(e) {
       });
     }
 
-    var ss = resolveSpreadsheet(e ? e.parameter : null);
-    if (!ss) {
+    // 2. Explicitly resolve the spreadsheet
+    var resolved = resolveSpreadsheet(params);
+    if (!resolved.spreadsheet) {
       return jsonResponse({
         success: false,
-        error: 'Unable to open active spreadsheet. Ensure script is bound to your sheet or provide sheetId parameter.'
+        error: resolved.error,
+        configuredSheetId: resolved.sheetId
       });
     }
 
+    var ss = resolved.spreadsheet;
+
+    // 3. Test connection probe (Settings page test)
+    if (params.action === 'test_access') {
+      var allTabs = ss.getSheets();
+      var tabNames = [];
+      for (var t = 0; t < allTabs.length; t++) {
+        tabNames.push(allTabs[t].getName());
+      }
+      return jsonResponse({
+        success: true,
+        message: 'Google Sheets connection verified successfully',
+        sheetTitle: ss.getName(),
+        sheetId: ss.getId(),
+        sheetTabs: tabNames,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 4. Read candidates and calendar (strictly read-only)
     var candidates = getRealCandidatesData(ss);
     var calendar = getRealCalendarData(ss);
     
@@ -130,18 +188,21 @@ function doGet(e) {
       candidates: candidates,
       calendar: calendar,
       sheetTitle: ss.getName(),
-      totalCandidates: candidates.length
+      totalCandidates: candidates.length,
+      sheetId: ss.getId()
     });
   } catch (err) {
+    Logger.log('doGet exception: ' + err.toString());
     return jsonResponse({
       success: false,
-      error: err.toString()
+      error: 'Google Apps Script error: ' + (err.message || err.toString())
     });
   }
 }
 
 /**
  * Handle HTTP POST: Mutates candidate status, adds manual candidates, schedules calls.
+ * Can target an isolated test sheet by providing sheetId in payload.
  */
 function doPost(e) {
   try {
@@ -151,19 +212,24 @@ function doPost(e) {
 
     var requestData = JSON.parse(e.postData.contents);
     var action = requestData.action;
-    var ss = resolveSpreadsheet(requestData);
-    
-    if (!ss) {
-      return jsonResponse({ success: false, error: 'Unable to open spreadsheet' });
+
+    if (action === 'PING') {
+      return jsonResponse({ success: true, message: 'Sprix Apps Script POST API online' });
     }
 
+    var resolved = resolveSpreadsheet(requestData);
+    if (!resolved.spreadsheet) {
+      return jsonResponse({
+        success: false,
+        error: resolved.error,
+        configuredSheetId: resolved.sheetId
+      });
+    }
+
+    var ss = resolved.spreadsheet;
     var result = { success: true };
     
     switch (action) {
-      case 'PING':
-        result = { success: true, message: 'Sprix Apps Script POST API online' };
-        break;
-
       case 'ADD_CANDIDATE':
         result = addCandidateToSheet(ss, requestData.candidate);
         break;
@@ -186,28 +252,58 @@ function doPost(e) {
     
     return jsonResponse(result);
   } catch (err) {
+    Logger.log('doPost exception: ' + err.toString());
     return jsonResponse({
       success: false,
-      error: err.toString()
+      error: 'Google Apps Script POST error: ' + (err.message || err.toString())
     });
   }
 }
 
 /**
- * Helper to resolve spreadsheet whether container-bound or standalone
+ * Helper to explicitly open spreadsheet by Spreadsheet ID.
+ * Eliminates reliance on active spreadsheet container context.
  */
 function resolveSpreadsheet(params) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss) return ss;
-  } catch (e) {}
+  var targetId = (params && (params.sheetId || params.spreadsheetId))
+    ? String(params.sheetId || params.spreadsheetId).trim()
+    : DEFAULT_SPREADSHEET_ID;
 
-  if (params && params.sheetId) {
+  var errors = [];
+
+  // 1. Primary: Explicit openById
+  if (targetId) {
     try {
-      return SpreadsheetApp.openById(params.sheetId);
-    } catch (e) {}
+      var ss = SpreadsheetApp.openById(targetId);
+      if (ss) {
+        return { spreadsheet: ss, error: null, sheetId: targetId };
+      }
+    } catch (err) {
+      var msg = 'SpreadsheetApp.openById("' + targetId + '") failed: ' + (err.message || err.toString());
+      Logger.log(msg);
+      errors.push(msg);
+    }
   }
-  return null;
+
+  // 2. Secondary fallback: Bound container context (if run from Google Sheets Extensions menu)
+  try {
+    var activeSs = SpreadsheetApp.getActiveSpreadsheet();
+    if (activeSs) {
+      return { spreadsheet: activeSs, error: null, sheetId: activeSs.getId() };
+    }
+  } catch (err) {
+    // Expected in standalone Web App execution
+  }
+
+  var failureReason = errors.length > 0
+    ? errors.join('; ')
+    : 'Unable to open spreadsheet. Please verify that the Google Sheet ID is valid and that the executing account has read access to the sheet.';
+
+  return {
+    spreadsheet: null,
+    error: failureReason,
+    sheetId: targetId
+  };
 }
 
 // ----------------------------------------------------

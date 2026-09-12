@@ -3,10 +3,13 @@ import { NextRequest, NextResponse } from 'next/server';
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_SHEET_ID = '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ';
+
 export async function POST(req: NextRequest) {
   try {
-    const { appsScriptUrl } = await req.json().catch(() => ({ appsScriptUrl: '' }));
+    const { appsScriptUrl, sheetId } = await req.json().catch(() => ({ appsScriptUrl: '', sheetId: '' }));
     const targetUrl = (appsScriptUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
+    const targetSheetId = (sheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
 
     if (!targetUrl) {
       return NextResponse.json({
@@ -15,9 +18,14 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Validate URL format
+    // Validate URL format and attach sheetId parameter
+    let fetchUrl: string;
     try {
-      new URL(targetUrl);
+      const urlObj = new URL(targetUrl);
+      if (targetSheetId && !urlObj.searchParams.has('sheetId')) {
+        urlObj.searchParams.set('sheetId', targetSheetId);
+      }
+      fetchUrl = urlObj.toString();
     } catch {
       return NextResponse.json({
         success: false,
@@ -31,7 +39,7 @@ export async function POST(req: NextRequest) {
 
     let res: Response;
     try {
-      res = await fetch(targetUrl, {
+      res = await fetch(fetchUrl, {
         method: 'GET',
         headers: {
           'Accept': 'application/json, text/plain, */*',
@@ -56,7 +64,7 @@ export async function POST(req: NextRequest) {
     if (res.status === 404) {
       return NextResponse.json({
         success: false,
-        error: 'Google Apps Script endpoint not found (HTTP 404). Your Web App deployment may have expired, changed, or been deleted. In Google Sheets, click Extensions > Apps Script > Deploy > New deployment > Web app, and copy the new URL.',
+        error: 'Google Apps Script endpoint not found (HTTP 404). Your Web App deployment may have expired, changed, or been deleted. In Google Sheets, click Extensions > Apps Script > Deploy > Manage deployments, choose "New version", and copy the updated URL.',
       }, { status: 502 });
     }
 

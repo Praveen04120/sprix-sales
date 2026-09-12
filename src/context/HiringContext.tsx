@@ -39,7 +39,7 @@ interface HiringContextType {
   isLoading: boolean;
   loadError: string | null;
   syncStatus: { isSyncing: boolean; lastSync: string; error: string | null };
-  fetchLatestData: (overrideUrl?: string) => Promise<void>;
+  fetchLatestData: (overrideUrl?: string, overrideSheetId?: string) => Promise<void>;
   triggerSync: () => Promise<void>;
   addCandidate: (candidate: Candidate) => Promise<void>;
   updateCandidate: (id: string, updates: Partial<Candidate>, note?: string) => void;
@@ -194,28 +194,34 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Fetch real data from backend API with automatic URL discovery
-  const fetchLatestData = useCallback(async (overrideUrl?: string) => {
+  const fetchLatestData = useCallback(async (overrideUrl?: string, overrideSheetId?: string) => {
     setIsLoading(true);
     setLoadError(null);
     try {
       let activeUrl = safeString(overrideUrl) || safeString(settings.appsScriptUrl);
-      if (!activeUrl && typeof window !== 'undefined') {
+      let activeSheetId = safeString(overrideSheetId) || safeString(settings.googleSheetId);
+      if ((!activeUrl || !activeSheetId) && typeof window !== 'undefined') {
         try {
           const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
           if (savedSettings) {
             const parsed = JSON.parse(savedSettings);
-            if (parsed.appsScriptUrl) activeUrl = safeString(parsed.appsScriptUrl);
+            if (!activeUrl && parsed.appsScriptUrl) activeUrl = safeString(parsed.appsScriptUrl);
+            if (!activeSheetId && parsed.googleSheetId) activeSheetId = safeString(parsed.googleSheetId);
           }
         } catch {}
       }
 
-      const queryUrl = activeUrl
-        ? `/api/candidates?appsScriptUrl=${encodeURIComponent(activeUrl)}`
-        : '/api/candidates';
+      const searchParams = new URLSearchParams();
+      if (activeUrl) searchParams.set('appsScriptUrl', activeUrl);
+      if (activeSheetId) searchParams.set('sheetId', activeSheetId);
+      const queryUrl = searchParams.toString() ? `/api/candidates?${searchParams.toString()}` : '/api/candidates';
 
       const res = await fetch(queryUrl, {
         cache: 'no-store',
-        headers: activeUrl ? { 'x-apps-script-url': activeUrl } : {},
+        headers: {
+          ...(activeUrl ? { 'x-apps-script-url': activeUrl } : {}),
+          ...(activeSheetId ? { 'x-sheet-id': activeSheetId } : {}),
+        },
       });
       const data = await res.json();
 
@@ -308,6 +314,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
   // Trigger sync with live Google Sheets (Strictly READ-ONLY on Google Sheet)
   const triggerSync = async () => {
     const targetUrl = safeString(settings.appsScriptUrl);
+    const targetSheetId = safeString(settings.googleSheetId);
     if (!targetUrl) {
       showToast('Please configure your Google Apps Script URL in Settings first.', 'error');
       return;
@@ -318,7 +325,10 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: targetUrl }),
+        body: JSON.stringify({ 
+          appsScriptUrl: targetUrl,
+          sheetId: targetSheetId,
+        }),
       });
 
       const data = await res.json();
@@ -359,6 +369,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
 
       // Post to Google Apps Script
       const activeUrl = safeString(settings.appsScriptUrl);
+      const activeSheetId = safeString(settings.googleSheetId);
       if (activeUrl) {
         try {
           const res = await fetch('/api/candidates', {
@@ -368,6 +379,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
               action: 'ADD_CANDIDATE',
               candidate: normalized,
               appsScriptUrl: activeUrl,
+              sheetId: activeSheetId,
             }),
           });
           const result = await res.json();
@@ -427,6 +439,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
 
       // Send update to Google Apps Script
       const activeUrl = safeString(settings.appsScriptUrl);
+      const activeSheetId = safeString(settings.googleSheetId);
       if (activeUrl) {
         fetch('/api/candidates', {
           method: 'POST',
@@ -444,6 +457,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
               notes: note,
             },
             appsScriptUrl: activeUrl,
+            sheetId: activeSheetId,
           }),
         }).catch(() => {});
       }
@@ -472,6 +486,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
       showToast('Activity scheduled on calendar', 'success');
 
       const activeUrl = safeString(settings.appsScriptUrl);
+      const activeSheetId = safeString(settings.googleSheetId);
       if (activeUrl) {
         fetch('/api/candidates', {
           method: 'POST',
@@ -480,6 +495,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
             action: 'ADD_CALENDAR_EVENT',
             event: newEvent,
             appsScriptUrl: activeUrl,
+            sheetId: activeSheetId,
           }),
         }).catch(() => {});
       }
@@ -515,6 +531,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         });
 
         const activeUrl = safeString(settings.appsScriptUrl);
+        const activeSheetId = safeString(settings.googleSheetId);
         if (activeUrl) {
           fetch('/api/candidates', {
             method: 'POST',
@@ -525,6 +542,7 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
               status: callStatus,
               reason: safeString(reason),
               appsScriptUrl: activeUrl,
+              sheetId: activeSheetId,
             }),
           }).catch(() => {});
         }
@@ -546,8 +564,11 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
 
-      if (newSettings.appsScriptUrl) {
-        fetchLatestData(safeString(newSettings.appsScriptUrl));
+      if (newSettings.appsScriptUrl || newSettings.googleSheetId) {
+        fetchLatestData(
+          safeString(newSettings.appsScriptUrl || settings.appsScriptUrl),
+          safeString(newSettings.googleSheetId || settings.googleSheetId)
+        );
       }
 
       showToast('Settings saved successfully', 'success');
