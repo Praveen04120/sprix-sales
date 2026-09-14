@@ -267,6 +267,70 @@ export async function POST(req: NextRequest) {
     }
 
     // -------------------------------------------------------------------------
+    // ACTION: BULK_IMPORT (Migrate/Sync batch of candidates to Supabase)
+    // -------------------------------------------------------------------------
+    if (action === 'BULK_IMPORT') {
+      const candidatesList: any[] = Array.isArray(body.candidates) ? body.candidates : [];
+      const eventsList: any[] = Array.isArray(body.calendar) ? body.calendar : [];
+
+      let importedCandidates = 0;
+      let importedEvents = 0;
+
+      if (supabase && candidatesList.length > 0) {
+        for (let i = 0; i < candidatesList.length; i++) {
+          const normCand = normalizeCandidate(candidatesList[i], i);
+          if (!normCand.name) continue;
+
+          const dbPayload = mapCandidateToDb(normCand);
+          const { data: upsertedCand, error: candErr } = await supabase
+            .from('candidates')
+            .upsert(dbPayload, { onConflict: 'candidate_code' })
+            .select('id')
+            .single();
+
+          if (!candErr && upsertedCand) {
+            importedCandidates++;
+            const candDbId = upsertedCand.id;
+
+            try {
+              await supabase.from('candidate_rounds').upsert([
+                { candidate_id: candDbId, round_number: 1, status: normCand.currentStage === 'ROUND_1' ? 'In Progress' : 'Passed' },
+                { candidate_id: candDbId, round_number: 2, status: normCand.currentStage === 'ROUND_2' ? 'Scheduled' : normCand.currentStage === 'ROUND_1' ? 'Pending' : 'Passed' },
+                { candidate_id: candDbId, round_number: 3, status: normCand.currentStage === 'ROUND_3' ? 'In Progress' : normCand.currentStage === 'SELECTED' ? 'Passed' : 'Pending' },
+              ], { onConflict: 'candidate_id, round_number' });
+            } catch {}
+
+            if (normCand.finalScore !== null && normCand.finalScore !== undefined) {
+              try {
+                await supabase.from('training_records').upsert({
+                  candidate_id: candDbId,
+                  final_score: normCand.finalScore,
+                  training_status: normCand.currentStage === 'WORKING' ? 'Completed' : 'In Training',
+                }, { onConflict: 'candidate_id' });
+              } catch {}
+            }
+          }
+        }
+      }
+
+      if (supabase && eventsList.length > 0) {
+        for (let j = 0; j < eventsList.length; j++) {
+          const normEvt = normalizeCalendarEvent(eventsList[j], j);
+          const dbEvt = mapCalendarEventToDb(normEvt);
+          const { error: evtErr } = await supabase.from('calendar_events').insert(dbEvt);
+          if (!evtErr) importedEvents++;
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        importedCandidates,
+        importedEvents,
+        message: `Successfully synchronized ${importedCandidates} candidates to Supabase`,
+      });
+    }
+
+    // -------------------------------------------------------------------------
     // ACTION: UPDATE_CANDIDATE
     // -------------------------------------------------------------------------
     if (action === 'UPDATE_CANDIDATE') {

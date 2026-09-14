@@ -9,6 +9,8 @@ import {
   Menu,
   Database,
   FileSpreadsheet,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function Header() {
@@ -105,15 +107,25 @@ export default function Header() {
       {/* Right Controls: Sync & Logout */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         {/* Connection Status Indicator */}
-        {settings.appsScriptUrl ? (
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold rounded-full">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Google Sheets Live</span>
+        {syncStatus.error ? (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-full" title={syncStatus.error}>
+            <AlertCircle className="w-3 h-3 text-rose-600 shrink-0" />
+            <span>Sync Issue</span>
+          </div>
+        ) : syncStatus.lastSync ? (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold rounded-full" title={`Last synced: ${syncStatus.lastSync}`}>
+            <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+            <span>Sheets Synced</span>
+          </div>
+        ) : settings.appsScriptUrl ? (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 border border-blue-200 text-[#01008A] text-xs font-semibold rounded-full">
+            <FileSpreadsheet className="w-3 h-3 text-[#01008A] shrink-0" />
+            <span>Sheets Configured</span>
           </div>
         ) : (
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded-full">
-            <FileSpreadsheet className="w-3 h-3 text-slate-500" />
-            <span>Google Sheets</span>
+            <FileSpreadsheet className="w-3 h-3 text-slate-500 shrink-0" />
+            <span>Sheets Offline</span>
           </div>
         )}
 
