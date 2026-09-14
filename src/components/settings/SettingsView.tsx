@@ -64,9 +64,6 @@ export default function SettingsView() {
         googleFormId: formId.trim(),
         googleFormUrl: formUrl.trim(),
       });
-      if (cleanUrl) {
-        await fetchLatestData(cleanUrl, sheetId.trim());
-      }
     } finally {
       setIsSaving(false);
     }

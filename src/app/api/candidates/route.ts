@@ -61,20 +61,18 @@ export async function GET(req: NextRequest) {
       ]);
 
       if (!candResult.error && Array.isArray(candResult.data)) {
-        // If Supabase already has candidates, return them as primary source of truth
-        if (candResult.data.length > 0) {
-          const candidates: Candidate[] = candResult.data.map((row: DbCandidateRow) => mapDbToCandidate(row));
-          const calendar: CalendarEvent[] = (eventResult.data || []).map((row: DbCalendarEventRow) => mapDbToCalendarEvent(row));
+        // Supabase is connected and responsive: return database records as single source of truth
+        const candidates: Candidate[] = candResult.data.map((row: DbCandidateRow) => mapDbToCandidate(row));
+        const calendar: CalendarEvent[] = (eventResult.data || []).map((row: DbCalendarEventRow) => mapDbToCalendarEvent(row));
 
-          return NextResponse.json({
-            success: true,
-            source: 'supabase',
-            candidates,
-            calendar,
-            totalCandidates: candidates.length,
-            lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          });
-        }
+        return NextResponse.json({
+          success: true,
+          source: 'supabase',
+          candidates,
+          calendar,
+          totalCandidates: candidates.length,
+          lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
       }
     } catch (dbErr) {
       console.warn('Supabase read attempt encountered error, falling back to Google Apps Script:', dbErr);

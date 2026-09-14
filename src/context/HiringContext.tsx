@@ -220,9 +220,54 @@ export function HiringProvider({ children }: { children: React.ReactNode }) {
 
         // If data loaded from Supabase or Google Sheets
         if (data.source === 'supabase') {
-          // Supabase is authoritative
-          persistCandidates(rawIncomingCand);
-          persistEvents(rawIncomingEvt);
+          if (rawIncomingCand.length > 0) {
+            // Supabase has candidates: Supabase is single source of truth
+            persistCandidates(rawIncomingCand);
+            persistEvents(rawIncomingEvt);
+          } else {
+            // Supabase is empty: check if this device has existing candidate records to auto-migrate
+            if (typeof window !== 'undefined') {
+              const saved = localStorage.getItem(STORAGE_KEY_REAL_CANDIDATES);
+              const savedEvents = localStorage.getItem(STORAGE_KEY_REAL_EVENTS);
+              let localCands: Candidate[] = [];
+              let localEvts: CalendarEvent[] = [];
+
+              if (saved) {
+                try {
+                  const parsed = JSON.parse(saved);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    localCands = parsed.map((c, idx) => normalizeCandidate(c, idx));
+                    setCandidates(localCands);
+                  }
+                } catch {}
+              }
+              if (savedEvents) {
+                try {
+                  const parsedEvts = JSON.parse(savedEvents);
+                  if (Array.isArray(parsedEvts) && parsedEvts.length > 0) {
+                    localEvts = parsedEvts.map((e, idx) => normalizeCalendarEvent(e, idx));
+                    setCalendarEvents(localEvts);
+                  }
+                } catch {}
+              }
+
+              // Auto-migrate local records to Supabase so they are immediately available across all recruiter devices
+              if (localCands.length > 0 || localEvts.length > 0) {
+                fetch('/api/candidates', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    action: 'BULK_IMPORT',
+                    candidates: localCands,
+                    calendar: localEvts,
+                  }),
+                }).catch(() => {});
+              } else {
+                setCandidates([]);
+                setCalendarEvents([]);
+              }
+            }
+          }
         } else {
           // Merge with current state
           const mergedCand = mergeCandidateRecords(candidates, rawIncomingCand);
