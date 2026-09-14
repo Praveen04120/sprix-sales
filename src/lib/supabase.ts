@@ -2,6 +2,11 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Candidate, CalendarEvent, AppSettings, Stage, CandidateStatus, AdminNote, StageHistoryItem } from '@/types';
 import { safeString, safeNumber, deriveStageFromStatus, normalizeCandidate, normalizeCalendarEvent } from './normalize';
 
+// Dedicated Sprix Hiring Management Supabase Project Credentials
+// Project Reference: jtwghkzcnhvnsimlxaqe
+const DEDICATED_SPRIX_SUPABASE_URL = 'https://jtwghkzcnhvnsimlxaqe.supabase.co';
+const DEDICATED_SPRIX_PUBLIC_KEY = 'sb_publishable_zm8VGgaWLD_iC-AEqH2pAg_94TdAhTP';
+
 /**
  * Clean and normalize Supabase project base URL.
  * Automatically strips trailing slashes or /rest/v1/ suffix if provided.
@@ -10,16 +15,14 @@ function cleanSupabaseUrl(raw: string): string {
   let cleaned = (raw || '').trim();
   cleaned = cleaned.replace(/\/rest\/v1\/?$/i, '');
   cleaned = cleaned.replace(/\/+$/, '');
-  return cleaned;
+  return cleaned || DEDICATED_SPRIX_SUPABASE_URL;
 }
 
 /**
  * Check if Supabase credentials are configured in current environment.
  */
 export function isSupabaseConfigured(): boolean {
-  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '');
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
-  return Boolean(url && key && url.startsWith('http'));
+  return true;
 }
 
 /**
@@ -30,20 +33,16 @@ export function isSupabaseConfigured(): boolean {
 let cachedServerClient: SupabaseClient | null = null;
 
 export function getSupabaseServerClient(): SupabaseClient | null {
-  if (!isSupabaseConfigured()) {
-    return null;
-  }
-
   if (cachedServerClient) {
     return cachedServerClient;
   }
 
-  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '');
+  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || DEDICATED_SPRIX_SUPABASE_URL);
   const serviceKey = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     process.env.SUPABASE_ANON_KEY ||
-    ''
+    DEDICATED_SPRIX_PUBLIC_KEY
   ).trim();
 
   cachedServerClient = createClient(url, serviceKey, {
@@ -62,12 +61,8 @@ export function getSupabaseServerClient(): SupabaseClient | null {
 let cachedBrowserClient: SupabaseClient | null = null;
 
 export function getSupabaseBrowserClient(): SupabaseClient | null {
-  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
-  const anonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
-
-  if (!url || !anonKey || !url.startsWith('http')) {
-    return null;
-  }
+  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || DEDICATED_SPRIX_SUPABASE_URL);
+  const anonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEDICATED_SPRIX_PUBLIC_KEY).trim();
 
   if (cachedBrowserClient) {
     return cachedBrowserClient;

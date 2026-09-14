@@ -27,7 +27,6 @@ export async function GET() {
       }
     }
 
-    // Fallback if Supabase not configured or table not yet initialized
     return NextResponse.json({
       success: true,
       isSupabaseConnected: isSupabaseConfigured(),
@@ -51,14 +50,24 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-
-    const appsScriptUrl = safeString(body.appsScriptUrl);
-    const googleSheetId = safeString(body.googleSheetId) || DEFAULT_SHEET_ID;
-    const googleSheetUrl = safeString(body.googleSheetUrl);
-    const googleFormId = safeString(body.googleFormId);
-    const googleFormUrl = safeString(body.googleFormUrl);
-
     const supabase = getSupabaseServerClient();
+
+    let currentSettings: any = null;
+    if (supabase) {
+      const { data } = await supabase
+        .from('platform_settings')
+        .select('*')
+        .eq('id', 'default')
+        .maybeSingle();
+      currentSettings = data;
+    }
+
+    const appsScriptUrl = body.appsScriptUrl !== undefined ? safeString(body.appsScriptUrl) : (currentSettings?.apps_script_url || '');
+    const googleSheetId = body.googleSheetId !== undefined ? (safeString(body.googleSheetId) || DEFAULT_SHEET_ID) : (currentSettings?.google_sheet_id || DEFAULT_SHEET_ID);
+    const googleSheetUrl = body.googleSheetUrl !== undefined ? safeString(body.googleSheetUrl) : (currentSettings?.google_sheet_url || '');
+    const googleFormId = body.googleFormId !== undefined ? safeString(body.googleFormId) : (currentSettings?.google_form_id || '');
+    const googleFormUrl = body.googleFormUrl !== undefined ? safeString(body.googleFormUrl) : (currentSettings?.google_form_url || '');
+
     let persistedToSupabase = false;
 
     if (supabase) {
@@ -100,14 +109,14 @@ export async function POST(req: NextRequest) {
       isSupabaseConnected: isSupabaseConfigured(),
       message: persistedToSupabase
         ? 'Settings saved and synchronized to Supabase across all devices'
-        : 'Settings saved locally. Connect Supabase for multi-device sync.',
+        : 'Settings saved locally.',
       settings: {
         appsScriptUrl,
         googleSheetId,
         googleSheetUrl,
         googleFormId,
         googleFormUrl,
-        lastSyncTime: null,
+        lastSyncTime: currentSettings?.last_sync_time ? new Date(currentSettings.last_sync_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
       },
     });
   } catch (err: unknown) {

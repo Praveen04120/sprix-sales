@@ -11,8 +11,25 @@ const DEFAULT_SHEET_ID = '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ';
 export async function POST(req: NextRequest) {
   try {
     const { appsScriptUrl, sheetId } = await req.json().catch(() => ({ appsScriptUrl: '', sheetId: '' }));
-    const targetUrl = (appsScriptUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
-    const targetSheetId = (sheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
+    let targetUrl = (appsScriptUrl || process.env.GOOGLE_APPS_SCRIPT_URL || '').trim();
+    let targetSheetId = (sheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
+
+    const supabase = getSupabaseServerClient();
+    if (!targetUrl && supabase) {
+      try {
+        const { data: dbSettings } = await supabase
+          .from('platform_settings')
+          .select('apps_script_url, google_sheet_id')
+          .eq('id', 'default')
+          .maybeSingle();
+        if (dbSettings?.apps_script_url) {
+          targetUrl = dbSettings.apps_script_url.trim();
+          if (dbSettings.google_sheet_id) {
+            targetSheetId = dbSettings.google_sheet_id.trim();
+          }
+        }
+      } catch {}
+    }
 
     if (!targetUrl) {
       return NextResponse.json({
@@ -110,7 +127,6 @@ export async function POST(req: NextRequest) {
     const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nowIso = new Date().toISOString();
 
-    const supabase = getSupabaseServerClient();
     let syncedToSupabase = false;
 
     // -------------------------------------------------------------------------

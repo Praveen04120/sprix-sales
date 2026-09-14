@@ -27,11 +27,28 @@ export async function GET(req: NextRequest) {
   const headerSheetId = req.headers.get('x-sheet-id');
   const sheetId = (paramSheetId || headerSheetId || process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID).trim();
 
+  let activeAppsScriptUrl = appsScriptUrl;
+  let activeSheetId = sheetId;
   const supabase = getSupabaseServerClient();
 
   // 1. If Supabase is connected, attempt to fetch persistent data from Supabase
   if (supabase) {
     try {
+      // Check if apps_script_url is in platform_settings if not provided in request
+      if (!activeAppsScriptUrl) {
+        const { data: dbSettings } = await supabase
+          .from('platform_settings')
+          .select('apps_script_url, google_sheet_id')
+          .eq('id', 'default')
+          .maybeSingle();
+        if (dbSettings?.apps_script_url) {
+          activeAppsScriptUrl = dbSettings.apps_script_url.trim();
+          if (dbSettings.google_sheet_id) {
+            activeSheetId = dbSettings.google_sheet_id.trim();
+          }
+        }
+      }
+
       const [candResult, eventResult] = await Promise.all([
         supabase
           .from('candidates')
@@ -64,17 +81,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 2. If Supabase is empty or unconfigured, read from Google Apps Script if URL provided
-  if (appsScriptUrl) {
+  // 2. If Supabase is empty, read from Google Apps Script if URL provided or saved in settings
+  if (activeAppsScriptUrl) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-      let fetchUrl = appsScriptUrl;
+      let fetchUrl = activeAppsScriptUrl;
       try {
-        const urlObj = new URL(appsScriptUrl);
-        if (sheetId && !urlObj.searchParams.has('sheetId')) {
-          urlObj.searchParams.set('sheetId', sheetId);
+        const urlObj = new URL(activeAppsScriptUrl);
+        if (activeSheetId && !urlObj.searchParams.has('sheetId')) {
+          urlObj.searchParams.set('sheetId', activeSheetId);
         }
         fetchUrl = urlObj.toString();
       } catch {}

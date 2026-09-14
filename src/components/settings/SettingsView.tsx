@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 export default function SettingsView() {
-  const { settings, updateSettings, showToast, fetchLatestData, isSupabaseConnected } = useHiring();
+  const { settings, updateSettings, showToast, fetchLatestData, isSupabaseConnected, triggerSync, syncStatus } = useHiring();
 
   const [appsScriptUrl, setAppsScriptUrl] = useState(settings.appsScriptUrl || '');
   const [sheetId, setSheetId] = useState(settings.googleSheetId || '');
@@ -221,6 +221,16 @@ export default function SettingsView() {
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
                   <span>{testing ? 'Verifying...' : 'Test Connection'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={triggerSync}
+                  disabled={syncStatus.isSyncing}
+                  className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-[#01008A] font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer border border-blue-200"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{syncStatus.isSyncing ? 'Syncing...' : 'Sync Candidates from Google Sheets'}</span>
                 </button>
               </div>
 
