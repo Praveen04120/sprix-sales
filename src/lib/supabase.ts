@@ -3,10 +3,21 @@ import { Candidate, CalendarEvent, AppSettings, Stage, CandidateStatus, AdminNot
 import { safeString, safeNumber, deriveStageFromStatus, normalizeCandidate, normalizeCalendarEvent } from './normalize';
 
 /**
+ * Clean and normalize Supabase project base URL.
+ * Automatically strips trailing slashes or /rest/v1/ suffix if provided.
+ */
+function cleanSupabaseUrl(raw: string): string {
+  let cleaned = (raw || '').trim();
+  cleaned = cleaned.replace(/\/rest\/v1\/?$/i, '');
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned;
+}
+
+/**
  * Check if Supabase credentials are configured in current environment.
  */
 export function isSupabaseConfigured(): boolean {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '');
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
   return Boolean(url && key && url.startsWith('http'));
 }
@@ -27,7 +38,7 @@ export function getSupabaseServerClient(): SupabaseClient | null {
     return cachedServerClient;
   }
 
-  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
+  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '');
   const serviceKey = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
@@ -51,7 +62,7 @@ export function getSupabaseServerClient(): SupabaseClient | null {
 let cachedBrowserClient: SupabaseClient | null = null;
 
 export function getSupabaseBrowserClient(): SupabaseClient | null {
-  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+  const url = cleanSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
   const anonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
 
   if (!url || !anonKey || !url.startsWith('http')) {
