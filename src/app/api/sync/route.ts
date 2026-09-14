@@ -38,12 +38,17 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Validate URL format and attach sheetId parameter
+    // Validate URL format and attach sheetId and spreadsheetId parameters
     let fetchUrl: string;
     try {
       const urlObj = new URL(targetUrl);
-      if (targetSheetId && !urlObj.searchParams.has('sheetId')) {
-        urlObj.searchParams.set('sheetId', targetSheetId);
+      if (targetSheetId) {
+        if (!urlObj.searchParams.has('sheetId')) {
+          urlObj.searchParams.set('sheetId', targetSheetId);
+        }
+        if (!urlObj.searchParams.has('spreadsheetId')) {
+          urlObj.searchParams.set('spreadsheetId', targetSheetId);
+        }
       }
       fetchUrl = urlObj.toString();
     } catch {
@@ -115,9 +120,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (data.success === false && data.error) {
+      const errStr = String(data.error);
+      let enhancedError = `Google Apps Script error: ${errStr}`;
+      if (errStr.includes('Unable to open active spreadsheet')) {
+        enhancedError = 'Google Apps Script deployment is running an older version. Please update Code.gs in Apps Script editor, run testSpreadsheetAccess once to authorize, then click: Deploy > Manage deployments > Edit > Version: "New version" > Deploy.';
+      }
       return NextResponse.json({
         success: false,
-        error: `Google Apps Script error: ${data.error}`,
+        error: enhancedError,
       }, { status: 502 });
     }
 

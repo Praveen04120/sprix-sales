@@ -11,6 +11,9 @@ import {
   Database,
   Laptop,
   Check,
+  Copy,
+  Code2,
+  ExternalLink,
 } from 'lucide-react';
 
 export default function SettingsView() {
@@ -24,6 +27,22 @@ export default function SettingsView() {
   const [testStatus, setTestStatus] = useState<{ text: string; isSuccess: boolean } | null>(null);
   const [testing, setTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  const handleCopyCode = async () => {
+    try {
+      const res = await fetch('/api/apps-script-code');
+      const text = await res.text();
+      if (text) {
+        await navigator.clipboard.writeText(text);
+        setCopiedCode(true);
+        showToast('Latest Code.gs copied to clipboard!', 'success');
+        setTimeout(() => setCopiedCode(false), 3500);
+      }
+    } catch {
+      showToast('Please copy from google_apps_script/Code.gs in the repository.', 'info');
+    }
+  };
 
   useEffect(() => {
     if (settings.appsScriptUrl) setAppsScriptUrl(settings.appsScriptUrl);
@@ -232,22 +251,68 @@ export default function SettingsView() {
                   <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.isSyncing ? 'animate-spin' : ''}`} />
                   <span>{syncStatus.isSyncing ? 'Syncing...' : 'Sync Candidates from Google Sheets'}</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyCode}
+                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-200"
+                >
+                  {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
+                  <span>{copiedCode ? 'Code.gs Copied to Clipboard!' : 'Copy Latest Code.gs'}</span>
+                </button>
               </div>
 
               {testStatus && (
-                <div
-                  className={`p-3 rounded-xl text-xs flex items-start gap-2 border ${
-                    testStatus.isSuccess
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : 'bg-rose-50 border-rose-200 text-rose-800'
-                  }`}
-                >
-                  {testStatus.isSuccess ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-3">
+                  <div
+                    className={`p-3 rounded-xl text-xs flex items-start gap-2 border ${
+                      testStatus.isSuccess
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-rose-50 border-rose-200 text-rose-800'
+                    }`}
+                  >
+                    {testStatus.isSuccess ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    )}
+                    <div className="leading-relaxed">{testStatus.text}</div>
+                  </div>
+
+                  {!testStatus.isSuccess && (
+                    <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-slate-700">
+                      <div className="font-bold text-amber-950 flex items-center gap-1.5 text-xs">
+                        <Code2 className="w-4 h-4 text-amber-700 shrink-0" />
+                        <span>How to Update Google Apps Script Deployment (1-Minute Quick Fix):</span>
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-slate-700 pl-1 leading-relaxed">
+                        <li>
+                          Open your recruitment Google Spreadsheet (ID:{' '}
+                          <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 font-semibold text-[#01008A]">
+                            {sheetId || '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ'}
+                          </code>
+                          ).
+                        </li>
+                        <li>In the top menu, click <strong>Extensions &gt; Apps Script</strong>.</li>
+                        <li>
+                          Click <strong>Copy Latest Code.gs</strong> above, then in Apps Script press{' '}
+                          <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-2xs text-[10px]">Ctrl+A</kbd>{' '}
+                          and paste{' '}
+                          <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-2xs text-[10px]">Ctrl+V</kbd>{' '}
+                          and save{' '}
+                          <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-2xs text-[10px]">Ctrl+S</kbd>.
+                        </li>
+                        <li>
+                          In the function dropdown on the toolbar, select <strong>testSpreadsheetAccess</strong> and click{' '}
+                          <strong>Run</strong> (click &quot;Review permissions&quot; &gt; &quot;Allow&quot; if prompted).
+                        </li>
+                        <li>
+                          Click <strong>Deploy &gt; Manage deployments</strong> &gt; click the <strong>pencil (edit) icon</strong> &gt; under Version select <strong>New version</strong> &gt; click <strong>Deploy</strong>.
+                        </li>
+                        <li>Return here and click <strong>Test Connection</strong> to verify live synchronization!</li>
+                      </ol>
+                    </div>
                   )}
-                  <div className="leading-relaxed">{testStatus.text}</div>
                 </div>
               )}
             </div>

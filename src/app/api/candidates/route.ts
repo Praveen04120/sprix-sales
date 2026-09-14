@@ -90,8 +90,13 @@ export async function GET(req: NextRequest) {
       let fetchUrl = activeAppsScriptUrl;
       try {
         const urlObj = new URL(activeAppsScriptUrl);
-        if (activeSheetId && !urlObj.searchParams.has('sheetId')) {
-          urlObj.searchParams.set('sheetId', activeSheetId);
+        if (activeSheetId) {
+          if (!urlObj.searchParams.has('sheetId')) {
+            urlObj.searchParams.set('sheetId', activeSheetId);
+          }
+          if (!urlObj.searchParams.has('spreadsheetId')) {
+            urlObj.searchParams.set('spreadsheetId', activeSheetId);
+          }
         }
         fetchUrl = urlObj.toString();
       } catch {}
@@ -145,7 +150,12 @@ export async function GET(req: NextRequest) {
           lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         });
       } else {
-        throw new Error(data.error || 'Google Apps Script returned an error response');
+        const errStr = String(data.error || 'Google Apps Script returned an error response');
+        let enhancedError = errStr;
+        if (errStr.includes('Unable to open active spreadsheet')) {
+          enhancedError = 'Google Apps Script deployment is running an older version. Please update Code.gs in Apps Script editor, run testSpreadsheetAccess once to authorize, then deploy a New Version.';
+        }
+        throw new Error(enhancedError);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to reach Google Apps Script';
