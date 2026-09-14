@@ -8,11 +8,13 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
-  ExternalLink,
+  Database,
+  Laptop,
+  Check,
 } from 'lucide-react';
 
 export default function SettingsView() {
-  const { settings, updateSettings, showToast, fetchLatestData } = useHiring();
+  const { settings, updateSettings, showToast, fetchLatestData, isSupabaseConnected } = useHiring();
 
   const [appsScriptUrl, setAppsScriptUrl] = useState(settings.appsScriptUrl || '');
   const [sheetId, setSheetId] = useState(settings.googleSheetId || '');
@@ -21,6 +23,7 @@ export default function SettingsView() {
   const [formUrl, setFormUrl] = useState(settings.googleFormUrl || '');
   const [testStatus, setTestStatus] = useState<{ text: string; isSuccess: boolean } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (settings.appsScriptUrl) setAppsScriptUrl(settings.appsScriptUrl);
@@ -30,18 +33,23 @@ export default function SettingsView() {
     if (settings.googleFormUrl) setFormUrl(settings.googleFormUrl);
   }, [settings]);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
     const cleanUrl = appsScriptUrl.trim();
-    updateSettings({
-      appsScriptUrl: cleanUrl,
-      googleSheetId: sheetId.trim(),
-      googleSheetUrl: sheetUrl.trim(),
-      googleFormId: formId.trim(),
-      googleFormUrl: formUrl.trim(),
-    });
-    if (cleanUrl) {
-      fetchLatestData(cleanUrl);
+    try {
+      await updateSettings({
+        appsScriptUrl: cleanUrl,
+        googleSheetId: sheetId.trim(),
+        googleSheetUrl: sheetUrl.trim(),
+        googleFormId: formId.trim(),
+        googleFormUrl: formUrl.trim(),
+      });
+      if (cleanUrl) {
+        await fetchLatestData(cleanUrl, sheetId.trim());
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -87,16 +95,42 @@ export default function SettingsView() {
   return (
     <div className="space-y-6 pb-12 max-w-4xl">
       {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex items-center justify-between">
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-bold uppercase tracking-wider text-[#01008A] bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
-            System Configuration
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#01008A] bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+              System Configuration
+            </span>
+            {isSupabaseConnected ? (
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1">
+                <Check className="w-3 h-3 text-emerald-600" />
+                <span>Supabase Connected (Cross-Device Sync Active)</span>
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1">
+                <Database className="w-3 h-3 text-amber-600" />
+                <span>Supabase Ready (Awaiting Credentials)</span>
+              </span>
+            )}
+          </div>
           <h1 className="text-2xl font-bold text-slate-900 mt-2">
             Platform Settings
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Connect your production Google Sheets data layer, Apps Script endpoint, and Google Form.
+            Central settings saved to Supabase and shared persistently across all recruiter laptops.
+          </p>
+        </div>
+
+        {/* Sync Status Badge */}
+        <div className="text-left sm:text-right text-xs text-slate-500">
+          <div className="flex items-center sm:justify-end gap-1 font-semibold text-slate-700">
+            <Laptop className="w-3.5 h-3.5 text-[#01008A]" />
+            <span>Cross-Device Persistence</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            {isSupabaseConnected
+              ? 'Synced via Supabase PostgreSQL'
+              : 'Add Supabase keys to enable sync'}
           </p>
         </div>
       </div>
@@ -210,7 +244,30 @@ export default function SettingsView() {
           </div>
         </div>
 
-        {/* Section 2: Security & Password Information */}
+        {/* Section 2: Database Storage Architecture */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-3 text-xs">
+          <div className="flex items-center gap-2 text-slate-800">
+            <Database className="w-4 h-4 text-[#01008A]" />
+            <h2 className="font-bold uppercase tracking-wider">
+              Supabase Central Persistence Engine
+            </h2>
+          </div>
+
+          <p className="text-slate-600 leading-relaxed">
+            All candidate profiles, stage progressions (Round 1 → Round 2 → Round 3), 0–10 evaluation scores, scheduled calls, and these integration settings are stored in your central Supabase PostgreSQL database.
+          </p>
+
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 font-mono text-[11px] text-slate-600">
+            <div>• candidates: Core candidate records, contact info, stages, scores</div>
+            <div>• candidate_rounds: Round 1, 2, 3 progression records</div>
+            <div>• training_records: Training days, attendance, and final evaluation feedback</div>
+            <div>• calendar_events: Scheduled phone interviews, calls, and meetings</div>
+            <div>• platform_settings: Shared integration endpoints (multi-device synchronized)</div>
+            <div>• platform_activity: Audit logging for candidate and status updates</div>
+          </div>
+        </div>
+
+        {/* Section 3: Portal Access Security */}
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-3 text-xs">
           <div className="flex items-center gap-2 text-slate-800">
             <ShieldCheck className="w-4 h-4 text-[#01008A]" />
@@ -220,11 +277,7 @@ export default function SettingsView() {
           </div>
 
           <p className="text-slate-600 leading-relaxed">
-            The platform is secured with your private administrator password. Password verification is strictly processed server-side through Next.js HTTP-only cookies, ensuring sensitive credentials are never leaked in client-side bundles.
-          </p>
-
-          <p className="text-slate-500">
-            To update the access password in production, configure the <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono font-bold text-slate-700">APP_PASSWORD</code> environment variable in your Vercel Project Settings.
+            Recruiter access is secured via server-side password validation and HTTP-only session cookies. Sensitive database keys (Service Role) are processed strictly within server route handlers and never exposed in client bundles.
           </p>
         </div>
 
@@ -232,9 +285,11 @@ export default function SettingsView() {
         <div className="flex items-center justify-end pt-2">
           <button
             type="submit"
-            className="px-6 py-2.5 bg-[#01008A] hover:bg-[#000066] text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
+            disabled={isSaving}
+            className="px-6 py-2.5 bg-[#01008A] hover:bg-[#000066] text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
           >
-            Save Settings
+            {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+            <span>{isSaving ? 'Saving Settings...' : 'Save Settings (Sync Across Devices)'}</span>
           </button>
         </div>
       </form>

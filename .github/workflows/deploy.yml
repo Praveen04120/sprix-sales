@@ -29,8 +29,11 @@ jobs:
         run: npm run build
         env:
           APP_PASSWORD: ${{ secrets.APP_PASSWORD || 'PraveenSPRIX@123' }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GOOGLE_APPS_SCRIPT_URL: ${{ secrets.GOOGLE_APPS_SCRIPT_URL }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID || '1E_WrVvh4LBCM60tfLjL3gx1QLw4LLPy1nA60mirzUKQ' }}
           GOOGLE_FORM_ID: ${{ secrets.GOOGLE_FORM_ID }}
 
       - name: Verify Build Output

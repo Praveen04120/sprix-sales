@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSupabaseServerClient, isSupabaseConfigured, mapCandidateToDb, mapDbToCandidate } from '@/lib/supabase';
+import { safeString, normalizeCandidate, normalizeCalendarEvent, safeLower } from '@/lib/normalize';
+import { Candidate, CalendarEvent } from '@/types';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Allow generous 45-second timeout to accommodate Google Apps Script cold-start latency
+    // 45-second timeout for Google Apps Script cold-start
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 45000);
 
@@ -64,7 +67,7 @@ export async function POST(req: NextRequest) {
     if (res.status === 404) {
       return NextResponse.json({
         success: false,
-        error: 'Google Apps Script endpoint not found (HTTP 404). Your Web App deployment may have expired, changed, or been deleted. In Google Sheets, click Extensions > Apps Script > Deploy > Manage deployments, choose "New version", and copy the updated URL.',
+        error: 'Google Apps Script endpoint not found (HTTP 404). Please verify your Web App URL in Settings.',
       }, { status: 502 });
     }
 
@@ -77,27 +80,14 @@ export async function POST(req: NextRequest) {
 
     const rawText = await res.text();
 
-    // Check if Google returned an HTML login or error page instead of JSON
     if (rawText.includes('<!DOCTYPE html>') || rawText.includes('<html')) {
-      if (rawText.includes('accounts.google.com') || rawText.includes('ServiceLogin') || rawText.includes('Sign in')) {
-        return NextResponse.json({
-          success: false,
-          error: 'Google Apps Script redirected to a Google sign-in page. Please re-deploy your Web App with "Who has access: Anyone".',
-        }, { status: 502 });
-      }
-      if (rawText.includes('Page not found') || rawText.includes('file you have requested does not exist')) {
-        return NextResponse.json({
-          success: false,
-          error: 'Google Drive reports this script does not exist. Please check that you copied the complete Web App URL including the "/exec" suffix.',
-        }, { status: 502 });
-      }
       return NextResponse.json({
         success: false,
-        error: 'Google Apps Script returned HTML instead of JSON. Ensure your script code ends with ContentService.createTextOutput(...).setMimeType(ContentService.MimeType.JSON).',
+        error: 'Google Apps Script returned HTML instead of JSON. Ensure your script is deployed as a Web App accessible to "Anyone".',
       }, { status: 502 });
     }
 
-    let data: Record<string, unknown>;
+    let data: Record<string, any>;
     try {
       data = JSON.parse(rawText);
     } catch {
@@ -114,11 +104,116 @@ export async function POST(req: NextRequest) {
       }, { status: 502 });
     }
 
+    const rawIncomingCandidates = Array.isArray(data.candidates) ? data.candidates : [];
+    const rawIncomingCalendar = Array.isArray(data.calendar) ? data.calendar : [];
+
+    const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowIso = new Date().toISOString();
+
+    const supabase = getSupabaseServerClient();
+    let syncedToSupabase = false;
+
+    // -------------------------------------------------------------------------
+    // SUPABASE DATA SYNCHRONIZATION WITH PRESERVATION OF OPERATIONAL DATA
+    // -------------------------------------------------------------------------
+    if (supabase) {
+      try {
+        // Fetch existing Supabase candidates to prevent overwriting recruiter changes
+        const { data: existingDbCandidates } = await supabase
+          .from('candidates')
+          .select('*');
+
+        const existingMap = new Map<string, any>();
+        (existingDbCandidates || []).forEach((row) => {
+          if (row.candidate_code) existingMap.set(safeLower(row.candidate_code), row);
+          if (row.source_id) existingMap.set(safeLower(row.source_id), row);
+          if (row.email) existingMap.set(safeLower(row.email), row);
+          if (row.phone) existingMap.set(safeString(row.phone).replace(/[^0-9]/g, ''), row);
+        });
+
+        for (let i = 0; i < rawIncomingCandidates.length; i++) {
+          const normIncoming = normalizeCandidate(rawIncomingCandidates[i], i);
+          const emailKey = safeLower(normIncoming.email);
+          const phoneKey = safeString(normIncoming.phone).replace(/[^0-9]/g, '');
+          const idKey = safeLower(normIncoming.id);
+
+          const existingMatch = existingMap.get(idKey) || (emailKey ? existingMap.get(emailKey) : null) || (phoneKey ? existingMap.get(phoneKey) : null);
+
+          if (!existingMatch) {
+            // New Candidate: insert fresh record
+            const dbRow = mapCandidateToDb(normIncoming);
+            const { data: newRow } = await supabase
+              .from('candidates')
+              .insert(dbRow)
+              .select('id')
+              .single();
+
+            if (newRow) {
+              try {
+                await supabase.from('candidate_rounds').upsert([
+                  { candidate_id: newRow.id, round_number: 1, status: 'In Progress' },
+                  { candidate_id: newRow.id, round_number: 2, status: 'Pending' },
+                  { candidate_id: newRow.id, round_number: 3, status: 'Pending' },
+                ]);
+              } catch {}
+            }
+          } else {
+            // Existing Candidate: PRESERVE statuses, scores, notes, and training
+            const mergedResponses = {
+              ...(existingMatch.form_responses || {}),
+              ...(normIncoming.formResponses || {}),
+            };
+
+            await supabase
+              .from('candidates')
+              .update({
+                form_responses: mergedResponses,
+                // Only update phone/location if existing was blank
+                phone: existingMatch.phone || normIncoming.phone || null,
+                location: existingMatch.location || normIncoming.location || null,
+              })
+              .eq('id', existingMatch.id);
+          }
+        }
+
+        // Update last sync time in platform_settings
+        try {
+          await supabase
+            .from('platform_settings')
+            .upsert({
+              id: 'default',
+              last_sync_time: nowIso,
+              updated_at: nowIso,
+            });
+        } catch {}
+
+        // Log audit activity
+        try {
+          await supabase
+            .from('platform_activity')
+            .insert({
+              action_type: 'SYNC',
+              description: `Google Sheets synced (${rawIncomingCandidates.length} applicants processed, zero production Sheet changes)`,
+              metadata: { count: rawIncomingCandidates.length, sheetId: targetSheetId },
+            });
+        } catch {}
+
+        syncedToSupabase = true;
+      } catch (syncErr) {
+        console.error('Supabase sync processing error:', syncErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: 'Google Sheets synchronization completed successfully',
-      data: data,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      syncedToSupabase,
+      message: 'Google Sheets synchronization completed successfully (Strictly Read-Only on Sheet)',
+      data: {
+        ...data,
+        candidates: rawIncomingCandidates.map((c: any, idx: number) => normalizeCandidate(c, idx)),
+        calendar: rawIncomingCalendar.map((e: any, idx: number) => normalizeCalendarEvent(e, idx)),
+      },
+      timestamp: nowFormatted,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Sync request failed';
